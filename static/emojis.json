@@ -1,0 +1,14 @@
+[
+  { "char": "👍", "name": "thumbs up", "aliases": ["thumbs_up", "thumbsup", "good"] },
+  { "char": "❤️", "name": "heart", "aliases": ["heart", "love"] },
+  { "char": "😂", "name": "laugh", "aliases": ["laugh"] },
+  { "char": "😮", "name": "wow", "aliases": ["wow"] },
+  { "char": "😢", "name": "sad", "aliases": ["sad"] },
+  { "char": "👎", "name": "thumbs down", "aliases": ["thumbs_down"] },
+  { "char": "🎉", "name": "party", "aliases": ["party", "celebrate", "confetti"] },
+  { "char": "🔥", "name": "fire", "aliases": ["fire"] },
+  { "char": "👏", "name": "clap", "aliases": ["clap"] },
+  { "char": "🤔", "name": "thinking", "aliases": ["thinking"] },
+  { "char": "😍", "name": "love eyes", "aliases": ["love_eyes", "heart_eyes"] },
+  { "char": "😅", "name": "sweat smile", "aliases": ["smile"] }
+]

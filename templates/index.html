@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ChatterBox</title>
+  <style>
+    .message { border-bottom: 1px solid #eee; padding:6px 0; }
+    .meta { font-size:0.85em; color:#777; }
+    .deleted { color:#999; font-style:italic; }
+    .quote { background:#f7f7f7; padding:6px; border-left:3px solid #ccc; margin-bottom:6px; }
+    button { margin-left:8px; }
+  </style>
+</head>
+<body>
+  <h1>ChatterBox</h1>
+
+  <div>
+    <label>Username / ID: <input id="clientId" /></label>
+    <button id="connectBtn">Connect</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="container"></div>
+
+  <button id="viewPinsBtn">View Pins</button>
+  <div id="pinsContainer" style="display:none; border:1px solid #ddd; padding:8px; margin:8px 0;"></div>
+
+  <div id="replyBox" style="display:none;">
+    Replying to: <span id="replyPreview"></span>
+    <button id="cancelReply">Cancel</button>
+  </div>
+
+  <textarea id="inputText" placeholder="Type a message..." rows="3" style="width:100%"></textarea><br/>
+  <input type="file" id="fileInput" accept ="image/*">
+
+  <button id="gifBtn">GIF</button>
+  <div id="gifPicker" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-width:640px; max-height:360px; overflow:auto;"></div>
+  
+  <button id="submitButton">Submit</button>
+
+<script>
+  let socket = null;
+  let myId = null;
+  let replyTo = null;
+  const msgIndex = {}; //id
+
+  let EMOJI_LIST = [];
+  let EMOJI_ALIASES = {};
+
+  // load emoji definitions from server static file
+fetch('/static/emojis.json')
+  .then(res => {
+    if (!res.ok) throw new Error('Failed to fetch emojis.json: ' + res.status);
+    return res.json();
+  })
+  .then(data => {
+    EMOJI_LIST = data.map(item => item.char).filter(Boolean);
+    EMOJI_ALIASES = {};
+    data.forEach(item => {
+      const ch = item.char;
+      (item.aliases || []).forEach(a => {
+        EMOJI_ALIASES[a.toLowerCase()] = ch;
+      });
+    });
+    console.log('[emoji] loaded', EMOJI_LIST.length, 'items');
+  })
+  .catch(err => {
+    console.warn('Could not load emojis.json:', err);
+    // fallback to a small local set if you want:
+    EMOJI_LIST = ["👍","❤️","😂"];
+    EMOJI_ALIASES = {"thumbs_up":"👍", "heart":"❤️", "laugh":"😂"};
+  });
+
+  
+  function showMessageElement(el) {
+    const container = document.getElementById('container');
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function renderMessage(msg, isLocalEcho=false) {
+    // store locally
+    msgIndex[msg.id] = msg;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message';
+    wrapper.id = 'msg-' + msg.id;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const time = new Date(msg.timestamp).toLocaleString();
+    meta.textContent = `${msg.author} • ${time} • id:${msg.id}`;
+    wrapper.appendChild(meta);
+
+    if (msg.reply_to) {
+      const q = document.createElement('div');
+      q.className = 'quote';
+      const quoted = msgIndex[msg.reply_to];
+      if (quoted) q.textContent = quoted.deleted ? "(original deleted)" : quoted.content;
+      else q.textContent = "(quoted message not loaded)";
+      wrapper.appendChild(q);
+    }
+
+    const content = document.createElement('div');
+    content.className = 'content';
+    
+    if (!msg.deleted) {
+      const text = msg.content || "";
+      if (isImageUrl(text)) {
+        const img = document.createElement('img');
+        img.src = text;
+        img.style.maxWidth = '300px';
+        img.style.borderRadius = '6px';
+        content.appendChild(img)
+      }
+
+      else if (isVideoUrl(text)) {
+        const vid = document.createElement('video');
+        vid.src = text;
+        vid.controls = true;
+        vid.style.maxWidth = '400px';
+        content.appendChild(vid);
+
+      } else {
+        content.innerHTML = marked.parse(text);
+      }
+    } else {
+      content.textContent = "(message deleted)";
+      content.classList.add('deleted');
+    }
+
+    wrapper.appendChild(content);
+
+    const reactionsBar = document.createElement('div');
+    //Reaction
+    reactionsBar.className = 'reactions';
+    //msg.reactions = emoji -> list of usernames
+    if (msg.reactions && typeof msg.reactions === 'object') {
+      Object.entries(msg.reactions).forEach(([emoji, users]) => {
+        const rbtn = document.createElement('button');
+        rbtn.textContent = `${emoji} ${users.length}`;
+        rbtn.onclick = () => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+        };
+        reactionsBar.appendChild(rbtn);
+      });
+    }
+    
+    // REACT BUTTON
+    const addReactBtn = document.createElement('button');
+    addReactBtn.textContent = '+';
+    addReactBtn.title = 'Add reaction';
+    addReactBtn.onclick = (ev) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      openEmojiPicker(addReactBtn, (emoji) => {
+        socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+      });
+      ev.stopPropagation?.();
+    };
+    reactionsBar.appendChild(addReactBtn)
+
+    wrapper.appendChild(reactionsBar);
+
+    const actions = document.createElement('div');
+
+    // Pin button
+    const pinBtn = document.createElement('button');
+    pinBtn.textContent = msg.pinned ? 'Unpin' : 'Pin';
+    pinBtn.onclick = () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      const pinFlag = !msg.pinned;
+      socket.send(JSON.stringify({ type: 'pin', id: msg.id, pin: pinFlag }));
+      msg.pinned = pinFlag;
+      pinBtn.textContent = pinFlag ? 'Unpin' : 'Pin';
+    };
+    actions.appendChild(pinBtn);
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy';
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(msg.content || '');
+        //feedback
+        copyBtn.textContent = 'Copied!';
+        setTimeout(()=> copyBtn.textContent = 'Copy', 900);
+      } catch (e) {
+        alert('Copy failed: ' + e);
+      }
+    };
+    actions.appendChild(copyBtn);
+
+    // Reply button
+    const replyBtn = document.createElement('button');
+    replyBtn.textContent = 'Reply';
+    replyBtn.onclick = () => startReply(msg.id);
+    actions.appendChild(replyBtn);
+
+    // Delete button
+    if (msg.author === myId && !msg.deleted) {
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.onclick = () => {
+        socket.send(JSON.stringify({ type: 'delete', id: msg.id }));
+      };
+      actions.appendChild(delBtn);
+    }
+
+    wrapper.appendChild(actions);
+
+    return wrapper;
+  }
+
+
+  const gifBtn = document.getElementById('gifBtn');
+  const gifPicker = document.getElementById('gifPicker');
+
+  //GIF Button
+  gifBtn.onclick = async () => {
+    // toggle display
+    if (gifPicker.style.display === 'block') { gifPicker.style.display = 'none'; return; }
+    gifPicker.innerHTML = '<input id="gifSearch" placeholder="Search GIFs..." /><div id="gifGrid"></div>';
+    gifPicker.style.display = 'block';
+    document.getElementById('gifSearch').addEventListener('input', debounce(async (e) => {
+      const q = e.target.value.trim();
+      const res = await fetch('/gif/search?q=' + encodeURIComponent(q || '') + '&limit=24');
+      const j = await res.json();
+      renderGifGrid(j.results || []);
+    }, 300));
+    // load trending initially
+    const res = await fetch('/gif/trending?limit=24');
+    const j = await res.json();
+    renderGifGrid(j.results || []);
+  };
+
+
+  function startReply(messageId) {
+    replyTo = messageId;
+    const preview = document.getElementById('replyPreview');
+    const msg = msgIndex[messageId];
+    preview.textContent = msg ? (msg.deleted ? '(deleted)' : msg.content) : '(loading...)';
+    document.getElementById('replyBox').style.display = 'block';
+  }
+
+  //Gif Render
+  function renderGifGrid(results){
+    const grid = document.getElementById('gifGrid');
+    grid.innerHTML = '';
+    results.forEach(g => {
+      const thumb = document.createElement('img');
+      thumb.src = g.preview || g.url;
+      thumb.style.width = '120px';
+      thumb.style.margin = '6px';
+      thumb.style.cursor = 'pointer';
+      thumb.title = g.title || '';
+      thumb.onclick = () => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type:'message', content: g.url }));
+        gifPicker.style.display = 'none';
+      };
+      grid.appendChild(thumb);
+    });
+  }
+
+  //Debounce Helper
+  function debounce(fn, wait){
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(()=>fn(...args), wait); };
+  }
+
+  //Favorite Gifs
+  function getLocalFavs(){ try{return JSON.parse(localStorage.getItem('gif_favs')||'[]');}catch(e){return []}}
+  function addLocalFav(g){ const arr=getLocalFavs(); if(!arr.find(x=>x.id===g.id)) arr.push(g); localStorage.setItem('gif_favs', JSON.stringify(arr)); }
+  function removeLocalFav(id){ let arr=getLocalFavs(); arr=arr.filter(x=>x.id!==id); localStorage.setItem('gif_favs', JSON.stringify(arr)); }
+
+  //Reactions
+  function openEmojiPicker(anchorEl, onChoose) {
+    closeEmojiPicker();
+    const picker = document.createElement('div');
+    picker.id = 'emoji-picker';
+    picker.style.position = 'absolute';
+    picker.style.background = '#fff';
+    picker.style.border = '1px solid #ccc';
+    picker.style.padding = '6px';
+    picker.style.boxShadow = '0 6px 12px rgba(0,0,0,0.12)';
+    picker.style.zIndex = 9999;
+
+    const input = document.createElement('input');
+    input.placeholder = 'Search emoji...';
+    input.style.width = '200px';
+    input.style.marginBottom = '6px';
+    picker.appendChild(input)
+
+    const grid = document.createElement('div');
+    grid.style.display = 'flex';
+    grid.style.flexWrap = 'wrap';
+    grid.style.gap = '6px'
+    picker.appendChild(grid);
+
+    function renderGrid(filter='') {
+    grid.innerHTML = '';
+    const q = (filter || '').toLowerCase().trim();
+    const candidates = EMOJI_LIST.filter(ch => {
+      if (!q) return true;
+      // match char or alias name
+      if (ch.includes(q)) return true;
+      return Object.keys(EMOJI_ALIASES).some(a => EMOJI_ALIASES[a] === ch && a.includes(q));
+    }).slice(0, 120);
+    candidates.forEach(ch => {
+      const b = document.createElement('button');
+      b.textContent = ch;
+      b.style.fontSize = '18px';
+      b.onclick = () => { onChoose(ch); closeEmojiPicker(); };
+      grid.appendChild(b);
+    });
+  }
+  input.addEventListener('input', e => renderGrid(e.target.value));
+  renderGrid();
+
+  document.body.appendChild(picker);
+
+
+  // position
+  const r = anchorEl.getBoundingClientRect();
+  picker.style.left = `${r.left}px`;
+  picker.style.top = `${r.bottom + window.scrollY + 6}px`;
+
+  setTimeout(()=> window.addEventListener('click', outsideClick));
+  function outsideClick(e) {
+    if (!picker.contains(e.target) && e.target !== anchorEl) closeEmojiPicker();
+  }
+  picker._outsideFn = outsideClick;
+}
+
+  function closeEmojiPicker() {
+    const p = document.getElementById('emoji-picker');
+    if (p) {
+      window.removeEventListener('click', p._outsideFn);
+      p.remove();
+    }
+  }
+
+  function replaceAliasesInText(text) {
+    return text.replace(/:([a-zA-Z0-9_+-]+):/g, (m, alias) => {
+      const ch = EMOJI_ALIASES[alias.toLowerCase()];
+    return ch || m;
+  });
+}
+
+  function isImageUrl(url){
+    return /\.(png|jpe?g|gif|webp)$/i.test(url);
+  }
+
+  function isVideoUrl(url) {
+    if (!url) return false;
+    return /\.(mp4|webm|ogg)$/i.test(url);
+  }
+
+  document.getElementById('cancelReply').onclick = () => {
+    replyTo = null;
+    document.getElementById('replyBox').style.display = 'none';
+    document.getElementById('replyPreview').textContent = '';
+  };
+
+  
+
+  document.getElementById('connectBtn').onclick = () => {
+    if (socket) {
+      socket.close();
+      socket = null;
+    }
+    myId = document.getElementById('clientId').value.trim();
+    if (!myId) {
+      alert('Please enter an ID (number or name) to connect with.');
+      return;
+    }
+    const wsUrl = `ws://127.0.0.1:8000/ws/${encodeURIComponent(myId)}`;
+    document.getElementById('status').textContent = 'Connecting...';
+    socket = new WebSocket(wsUrl);
+
+    socket.addEventListener('open', () => {
+      document.getElementById('status').textContent = 'Connected as ' + myId;
+    });
+
+    socket.addEventListener('close', () => {
+      document.getElementById('status').textContent = 'Disconnected';
+    });
+
+    socket.addEventListener('message', (ev) => {
+      // server sends JSON payloads
+      console.log('WS incoming payload:', ev.data);
+
+      let payload;
+      try {
+        payload = JSON.parse(ev.data);
+      } catch (e) {
+        console.warn('Non-JSON message', ev.data);
+        return;
+      }
+
+      if (payload.type === 'history') {
+        // initial history array
+        const msgs = payload.messages || [];
+        const container = document.getElementById('container');
+        container.innerHTML = ''; // clear
+        msgs.forEach(m => {
+          const node = renderMessage(m);
+          showMessageElement(node);
+        });
+        return;
+      }
+
+      if (payload.type === 'message') {
+        // render message
+        const node = renderMessage(payload);
+        showMessageElement(node);
+        return;
+      }
+
+      if (payload.type === 'delete') {
+        const id = payload.id;
+        const el = document.getElementById('msg-' + id);
+        if (el) {
+          const content = el.querySelector('.content');
+          if (content) {
+            content.textContent = '(message deleted)';
+            content.classList.add('deleted');
+          }
+        }
+        // update index if present
+        if (msgIndex[id]) msgIndex[id].deleted = true;
+        return;
+      }
+
+      if (payload.type === 'pin') {
+        //update local message object/UI
+        const id = payload.id;
+        const msg = msgIndex[id];
+        if (msg) {
+          msg.pinned = payload.pinned;
+          msg.pinned_by = payload.pinned_by || null;
+          msg.pinned_at = payload.pinned_at || null;
+
+          const el = document.getElementById('msg-' + id);
+          if (el) {
+            // update text of pin button (simple approach: rebuild actions area)
+            const newNode = renderMessage(msg);
+            el.replaceWith(newNode);
+          }
+        }
+        return;
+      }
+
+      if (payload.type === 'react') {
+        const id = payload.id;
+        const emoji = payload.emoji;
+        const users = payload.users || [];
+        const msg = msgIndex[id];
+        if (msg) {
+          msg.reactions = msg.reactions || {};
+          if (!Array.isArray(users) || users.length === 0) {
+            delete msg.reactions[emoji];
+          } else {
+            msg.reactions[emoji] = users;
+          }
+          const el = document.getElementById('msg-' + id);
+          if (el) {
+            const newNode = renderMessage(msg);
+            el.replaceWith(newNode);
+          }
+        }
+        return;
+      }
+
+      if (payload.type === 'error') {
+        alert('Server error: ' + (payload.error || 'unknown'));
+        return;
+      }
+
+      // handle other server types (notice, reply_preview etc)
+      if (payload.type === 'notice') {
+        const n = document.createElement('div');
+        n.textContent = payload.text;
+        showMessageElement(n);
+      }
+    });
+  };
+
+  document.getElementById('submitButton').onclick = () => {
+    const input = document.getElementById('inputText');
+    const text = input.value.trim();
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      alert('Not connected');
+      return;
+    }
+    if (!text && !replyTo) return;
+    const raw = input.value.trim();
+    const contentToSend = replaceAliasesInText(raw);
+    socket.send(JSON.stringify({ type: 'message', content: contentToSend, reply_to: replyTo || null }));
+
+    //const payload = { type: 'message', content: text, reply_to: replyTo || null };
+    //socket.send(JSON.stringify(payload));
+    input.value = '';
+    // reset reply UI
+    replyTo = null;
+    document.getElementById('replyBox').style.display = 'none';
+    document.getElementById('replyPreview').textContent = '';
+
+    
+  };
+
+  document.getElementById('viewPinsBtn').onclick = () => {
+    const pc = document.getElementById('pinsContainer');
+    if (pc.style.display === 'none') {
+      //show pinned messages
+      pc.innerHTML = '';
+      Object.values(msgIndex).filter(m => m.pinned).forEach(m => {
+        const node = renderMessage(m);
+        pc.appendChild(node);
+      });
+      pc.style.display = 'block';
+      document.getElementById('viewPinsBtn').textContent = 'Hide Pins';
+    } else {
+      pc.style.display = 'none';
+      document.getElementById('viewPinsBtn').textContent = 'View Pins'
+    }
+  };
+
+  document.getElementById('fileInput').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !socket) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch("/upload", {
+      method: "POST",
+      body: formData
+    });
+
+    const data = await res.json();
+    socket.send(JSON.stringify({
+      type: "message",
+      content: data.url
+    }));
+  };
+
+</script>
+</body>
+</html>
