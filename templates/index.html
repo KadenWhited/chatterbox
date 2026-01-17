@@ -13,32 +13,48 @@
     button { margin-left:8px; }
   </style>
 </head>
+
 <body>
   <h1>ChatterBox</h1>
 
-  <div>
-    <label>Username / ID: <input id="clientId" /></label>
-    <button id="connectBtn">Connect</button>
+  <div id="authBox" style="margin-bottom:12px;">
+    <input id="authUser" placeholder="username" />
+    <input id="authPass" type="password" placeholder="password" />
+    <button id="authRegister">Register</button>
+    <button id="authLogin">Login</button>
+    <span id="authStatus" style="margin-left:8px;color:#666;"></span>
   </div>
+
+  <div id="chatUI" style="display:none;">
+
+  <button id="connectBtn">Connect</button>
+  <button id="logoutBtn" style="margin-left:8px;">Logout</button>
 
   <div id="status"></div>
   <div id="container"></div>
 
   <button id="viewPinsBtn">View Pins</button>
-  <div id="pinsContainer" style="display:none; border:1px solid #ddd; padding:8px; margin:8px 0;"></div>
+  <div id="pinsContainer"
+    style="display:none; border:1px solid #ddd; padding:8px; margin:8px 0;"></div>
 
   <div id="replyBox" style="display:none;">
     Replying to: <span id="replyPreview"></span>
     <button id="cancelReply">Cancel</button>
   </div>
 
-  <textarea id="inputText" placeholder="Type a message..." rows="3" style="width:100%"></textarea><br/>
-  <input type="file" id="fileInput" accept ="image/*">
+  <textarea id="inputText" placeholder="Type a message..."
+    rows="3" style="width:100%"></textarea><br/>
+
+  <input type="file" id="fileInput" accept="image/*">
 
   <button id="gifBtn">GIF</button>
-  <div id="gifPicker" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-width:640px; max-height:360px; overflow:auto;"></div>
-  
+  <div id="gifPicker"
+    style="display:none; position:absolute; background:white; border:1px solid #ccc;
+      max-width:640px; max-height:360px; overflow:auto;"></div>
+
   <button id="submitButton">Submit</button>
+
+</div>
 
 <script>
   let socket = null;
@@ -46,11 +62,62 @@
   let replyTo = null;
   const msgIndex = {}; //id
 
+  // global saves
   let EMOJI_LIST = [];
   let EMOJI_ALIASES = {};
 
+  async function loadFavoriteMap() {
+  favoriteMap = {};
+  const token = localStorage.getItem('access_token');
+  if (!token) return;
+  try {
+    const res = await fetch('/gif/favorites', { headers: { 'token': token }});
+    if (!res.ok) return;
+    const j = await res.json();
+    (j.results || []).forEach(f => {
+      favoriteMap[String(f.gif_id)] = f.id;
+    });
+    console.log('[favorites] loaded', Object.keys(favoriteMap).length);
+  } catch (e) {
+    console.warn('[favorites] load failed', e);
+  }
+  }
+
+  function getGifProviderKeyFromResult(g) {
+    return String(g.id || g.gif_id || g.url || '');
+  }
+  function getGifProviderKeyFromUrl(url) {
+    return String(url || '');
+  }
+
+  function updateGifFavUI(gifKey) {
+    // update gif picker thumbs
+    document.querySelectorAll('[data-gif-id]').forEach(el => {
+      if (el.dataset.gifId !== gifKey) return;
+      const btn = el.querySelector('.fav-btn');
+      if (!btn) return;
+      const favId = favoriteMap[gifKey];
+      btn.textContent = favId ? '♥' : '♡';
+      btn.title = favId ? 'Unfavorite' : 'Favorite';
+    });
+
+    // update chat messages that show this gif
+    Object.values(msgIndex).forEach(m => {
+      const content = (m.content || '').toString();
+      const key = getGifProviderKeyFromUrl(content);
+      if (key !== gifKey) return;
+      const el = document.getElementById('msg-' + m.id);
+      if (!el) return;
+      const favBtn = el.querySelector('.gif-fav-btn');
+      if (!favBtn) return;
+      const favId = favoriteMap[gifKey];
+      favBtn.textContent = favId ? '♥' : '♡';
+      favBtn.title = favId ? 'Unfavorite' : 'Favorite';
+    });
+  } 
+
   // load emoji definitions from server static file
-fetch('/static/emojis.json')
+  fetch('/static/emojis.json')
   .then(res => {
     if (!res.ok) throw new Error('Failed to fetch emojis.json: ' + res.status);
     return res.json();
@@ -73,6 +140,23 @@ fetch('/static/emojis.json')
     EMOJI_ALIASES = {"thumbs_up":"👍", "heart":"❤️", "laugh":"😂"};
   });
 
+  let favoriteMap = {}; // gif_provider_id -> favorite_row_id
+
+  async function loadFavMap() {
+    favoriteMap = {};
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+    try {
+      const res = await fetch('/gif/favorites', { headers: { 'token': token }});
+      if (!res.ok) return;
+      const j = await res.json();
+      (j.results || []).forEach(f => {
+        favoriteMap[f.gif_id] = f.id;
+      });
+    } catch (e) {
+      console.warn('Failed to load favorites map', e);
+    }
+  }
   
   function showMessageElement(el) {
     const container = document.getElementById('container');
@@ -92,8 +176,18 @@ fetch('/static/emojis.json')
     meta.className = 'meta';
     const time = new Date(msg.timestamp).toLocaleString();
     meta.textContent = `${msg.author} • ${time} • id:${msg.id}`;
+    // show edited marker if present
+    if (msg.edited_at) {
+      const editedSpan = document.createElement('span');
+      editedSpan.style.marginLeft = '6px';
+      editedSpan.style.fontStyle = 'italic';
+      editedSpan.style.color = '#777';
+      editedSpan.textContent = '(edited)';
+      meta.appendChild(editedSpan);
+    }
     wrapper.appendChild(meta);
 
+    // quoted message preview (reply_to)
     if (msg.reply_to) {
       const q = document.createElement('div');
       q.className = 'quote';
@@ -105,18 +199,69 @@ fetch('/static/emojis.json')
 
     const content = document.createElement('div');
     content.className = 'content';
-    
+
+    // show content (or deleted placeholder)
     if (!msg.deleted) {
-      const text = msg.content || "";
+      const text = (msg.content || "").toString();
+
       if (isImageUrl(text)) {
         const img = document.createElement('img');
         img.src = text;
         img.style.maxWidth = '300px';
         img.style.borderRadius = '6px';
-        content.appendChild(img)
-      }
+        content.appendChild(img);
 
-      else if (isVideoUrl(text)) {
+        // per-message favorite button
+        const gifKey = getGifKeyFromUrl(text);
+        const favBtn = document.createElement('button');
+        favBtn.className = 'gif-fav-btn';
+        const favId = favoriteMap[gifKey];
+        favBtn.textContent = favId ? '♥' : '♡';
+        favBtn.title = favId ? 'Unfavorite' : 'Favorite';
+        favBtn.style.marginLeft = '8px';
+
+        favBtn.onclick = async (e) => {
+          e.stopPropagation();
+          const token = localStorage.getItem('access_token');
+          if (!token) { alert('Log in to favorite GIFs'); return; }
+
+          if (favoriteMap[gifKey]) {
+            const fid = favoriteMap[gifKey];
+            const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), {
+              method: 'DELETE',
+              headers: {'token': token}
+            });
+            if (res.ok) {
+              delete favoriteMap[gifKey];
+              favBtn.textContent = '♡';
+              favBtn.title = 'Favorite';
+              updateGifFavUI(gifKey);
+            } else {
+              alert('Failed to remove favorite');
+            }
+          } else {
+            const payload = { gif_id: text, url: text, preview: text, title: '' };
+            const res = await fetch('/gif/favorite', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'token': token},
+              body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+              const j = await res.json().catch(()=>({}));
+              if (j.id) favoriteMap[gifKey] = j.id;
+              favBtn.textContent = '♥';
+              favBtn.title = 'Unfavorite';
+              updateGifFavUI(gifKey);
+            } else {
+              const j = await res.json().catch(()=>({}));
+              alert('Favorite failed: ' + (j.detail || JSON.stringify(j)));
+            }
+          }
+        };
+
+        content.appendChild(favBtn);
+
+      } else if (isVideoUrl(text)) {
         const vid = document.createElement('video');
         vid.src = text;
         vid.controls = true;
@@ -126,6 +271,7 @@ fetch('/static/emojis.json')
       } else {
         content.innerHTML = marked.parse(text);
       }
+
     } else {
       content.textContent = "(message deleted)";
       content.classList.add('deleted');
@@ -133,14 +279,13 @@ fetch('/static/emojis.json')
 
     wrapper.appendChild(content);
 
+    // Reactions bar
     const reactionsBar = document.createElement('div');
-    //Reaction
     reactionsBar.className = 'reactions';
-    //msg.reactions = emoji -> list of usernames
     if (msg.reactions && typeof msg.reactions === 'object') {
       Object.entries(msg.reactions).forEach(([emoji, users]) => {
         const rbtn = document.createElement('button');
-        rbtn.textContent = `${emoji} ${users.length}`;
+        rbtn.textContent = `${emoji} ${Array.isArray(users) ? users.length : 0}`;
         rbtn.onclick = () => {
           if (!socket || socket.readyState !== WebSocket.OPEN) return;
           socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
@@ -148,8 +293,7 @@ fetch('/static/emojis.json')
         reactionsBar.appendChild(rbtn);
       });
     }
-    
-    // REACT BUTTON
+
     const addReactBtn = document.createElement('button');
     addReactBtn.textContent = '+';
     addReactBtn.title = 'Add reaction';
@@ -160,13 +304,13 @@ fetch('/static/emojis.json')
       });
       ev.stopPropagation?.();
     };
-    reactionsBar.appendChild(addReactBtn)
+    reactionsBar.appendChild(addReactBtn);
 
     wrapper.appendChild(reactionsBar);
 
+    // Actions (pin/copy/reply/delete/edit)
     const actions = document.createElement('div');
 
-    // Pin button
     const pinBtn = document.createElement('button');
     pinBtn.textContent = msg.pinned ? 'Unpin' : 'Pin';
     pinBtn.onclick = () => {
@@ -178,13 +322,11 @@ fetch('/static/emojis.json')
     };
     actions.appendChild(pinBtn);
 
-    // Copy button
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy';
     copyBtn.onclick = async () => {
       try {
         await navigator.clipboard.writeText(msg.content || '');
-        //feedback
         copyBtn.textContent = 'Copied!';
         setTimeout(()=> copyBtn.textContent = 'Copy', 900);
       } catch (e) {
@@ -193,13 +335,11 @@ fetch('/static/emojis.json')
     };
     actions.appendChild(copyBtn);
 
-    // Reply button
     const replyBtn = document.createElement('button');
     replyBtn.textContent = 'Reply';
     replyBtn.onclick = () => startReply(msg.id);
     actions.appendChild(replyBtn);
 
-    // Delete button
     if (msg.author === myId && !msg.deleted) {
       const delBtn = document.createElement('button');
       delBtn.textContent = 'Delete';
@@ -207,34 +347,99 @@ fetch('/static/emojis.json')
         socket.send(JSON.stringify({ type: 'delete', id: msg.id }));
       };
       actions.appendChild(delBtn);
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = 'Edit';
+      editBtn.className = 'edit-btn';
+      editBtn.dataset.msgId = msg.id;
+      actions.appendChild(editBtn);
     }
 
     wrapper.appendChild(actions);
-
     return wrapper;
   }
 
+  // delegated handler for edit buttons (works even if messages are rendered later)
+  document.getElementById('container').addEventListener('click', (ev) => {
+    const target = ev.target;
+    if (!target) return;
+    if (target.classList && target.classList.contains('edit-btn')) {
+      const msgId = target.dataset.msgId;
+      if (msgId) openEditUI(msgId);
+    }
+  });
 
-  const gifBtn = document.getElementById('gifBtn');
-  const gifPicker = document.getElementById('gifPicker');
+  // openEditUI: top-level (global) edit UI — supports replacing content (text or media URL).
+  function openEditUI(messageId) {
+    const el = document.getElementById('msg-' + messageId);
+    if (!el) return;
+    const contentEl = el.querySelector('.content');
+    if (!contentEl) return;
 
-  //GIF Button
-  gifBtn.onclick = async () => {
-    // toggle display
-    if (gifPicker.style.display === 'block') { gifPicker.style.display = 'none'; return; }
-    gifPicker.innerHTML = '<input id="gifSearch" placeholder="Search GIFs..." /><div id="gifGrid"></div>';
-    gifPicker.style.display = 'block';
-    document.getElementById('gifSearch').addEventListener('input', debounce(async (e) => {
-      const q = e.target.value.trim();
-      const res = await fetch('/gif/search?q=' + encodeURIComponent(q || '') + '&limit=24');
-      const j = await res.json();
-      renderGifGrid(j.results || []);
-    }, 300));
-    // load trending initially
-    const res = await fetch('/gif/trending?limit=24');
-    const j = await res.json();
-    renderGifGrid(j.results || []);
-  };
+    // create editor UI (textarea + optional file input + Save/Cancel)
+    const textarea = document.createElement('textarea');
+    textarea.style.width = '100%';
+    textarea.rows = 3;
+    textarea.value = (msgIndex[messageId] && msgIndex[messageId].content) || '';
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.style.display = 'block';
+    fileInput.style.marginTop = '6px';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.marginLeft = '6px';
+
+    // replace content element with editor
+    contentEl.innerHTML = '';
+    contentEl.appendChild(textarea);
+    contentEl.appendChild(fileInput);
+    contentEl.appendChild(saveBtn);
+    contentEl.appendChild(cancelBtn);
+
+    saveBtn.onclick = async () => {
+      const newText = textarea.value.trim();
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert('Not connected');
+        return;
+      }
+
+      // if a file is attached, upload it and use resulting URL as the new content
+      const file = fileInput.files && fileInput.files[0];
+      let finalContent = newText;
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const up = await fetch('/upload', { method: 'POST', body: fd });
+        if (!up.ok) {
+          alert('File upload failed');
+          return;
+        }
+        const upj = await up.json().catch(()=>({}));
+        finalContent = upj.url || finalContent;
+      }
+
+      // send edit request over websocket
+      socket.send(JSON.stringify({ type: 'edit', id: messageId, content: finalContent }));
+
+      // optimistic update
+      msgIndex[messageId].content = finalContent;
+      msgIndex[messageId].edited_at = new Date().toISOString();
+      const newNode = renderMessage(msgIndex[messageId]);
+      el.replaceWith(newNode);
+    };
+
+    cancelBtn.onclick = () => {
+      // restore original view
+      const newNode = renderMessage(msgIndex[messageId]);
+      el.replaceWith(newNode);
+    };
+  }
 
 
   function startReply(messageId) {
@@ -246,24 +451,228 @@ fetch('/static/emojis.json')
   }
 
   //Gif Render
-  function renderGifGrid(results){
+
+  // Simple GIF picker — replace your gifBtn.onclick handler with this
+  document.getElementById('gifBtn').onclick = async function openGifPicker() {
+    const gifPicker = document.getElementById('gifPicker');
+    if (!gifPicker) return;
+    if (gifPicker.style.display === 'block') { gifPicker.style.display = 'none'; return; }
+
+    gifPicker.innerHTML = `
+      <div style="padding:8px; display:flex; gap:8px; align-items:center;">
+        <button id="gifTrendingBtn">Trending</button>
+        <button id="gifSearchBtn">Search</button>
+        <button id="gifFavsBtn">Favorites</button>
+        <input id="gifSearchInput" placeholder="Search GIFs..." style="flex:1;" />
+      </div>
+      <div id="gifGrid" style="padding:8px; display:flex; flex-wrap:wrap;"></div>
+    `;
+    gifPicker.style.display = 'block';
+
     const grid = document.getElementById('gifGrid');
+    const searchInp = document.getElementById('gifSearchInput');
+    const token = localStorage.getItem('access_token');
+
+    async function ensureFavs() {
+      await loadFavoriteMap();
+    }
+
+    document.getElementById('gifTrendingBtn').onclick = async () => {
+      grid.innerHTML = 'Loading...';
+      await ensureFavs()
+      const res = await fetch('/gif/trending?limit=24');
+      const j = await res.json();
+      renderGifGrid(j.results || [], grid);
+    };
+
+    document.getElementById('gifSearchBtn').onclick = async () => {
+      const q = (seachInp && searchInp.value || '').trim();
+      grid.innerHTML = 'Searching...';
+      await ensureFavs
+      const res = await fetch('/gif/search?q=' + encodeURIComponent(q || '') + '&limit=24');
+      const j = await res.json();
+      renderGifGrid(j.results || [], grid);
+    };
+
+    document.getElementById('gifFavsBtn').onclick = async () => {
+      grid.innerHTML = 'Loading favorites...';
+      const token = localStorage.getItem('access_token');
+      if (!token) { grid.innerHTML = 'Log in to view favorites.'; return; }
+      await ensureFavs();
+      const res = await fetch('/gif/favorites', { headers: { 'token': token }});
+      if (!res.ok) { grid.innerHTML = 'Failed to load favorites'; return; }
+      const j = await res.json();
+      // server favorites shape: {id, gif_id, url, preview, title, metadata}
+      // convert to the same minimal object shape as search/trending results
+      const arr = (j.results || []).map(f => ({ id: f.gif_id, url: f.url, preview: f.preview, title: f.title }));
+      renderGifGrid(arr, grid);
+    };
+
+    // debounce search on enter / button
+    let t;
+    searchInp.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(()=> document.getElementById('gifSearchBtn').click(), 300);
+    });
+
+    // initial load trending
+    document.getElementById('gifTrendingBtn').click();
+  };
+
+
+    async function render(results) {
+      grid.innerHTML = '';
+      // refresh favorite map
+      await loadFavoriteMap();
+      for (const g of results) {
+        const url = g.url;
+        const idKey = String(g.id || g.url || g.gif_id || url);
+        const thumb = document.createElement('img');
+        thumb.src = g.preview || g.url;
+        thumb.style.width = '120px';
+        thumb.style.cursor = 'pointer';
+        thumb.onclick = () => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) { alert('Not connected'); return; }
+          socket.send(JSON.stringify({ type: 'message', content: url }));
+          gifPicker.style.display = 'none';
+        };
+
+        const favBtn = document.createElement('button');
+        favBtn.textContent = favoriteMap[idKey] ? '♥' : '♡';
+        favBtn.onclick = async (e) => {
+          e.stopPropagation();
+          if (!token) { alert('Log in to favorite'); return; }
+          if (favoriteMap[idKey]) {
+            // unfav
+            const fid = favoriteMap[idKey];
+            const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
+            if (res.ok) { delete favoriteMap[idKey]; favBtn.textContent = '♡'; updateGifFavUI(idKey); }
+          } else {
+            const payload = { gif_id: g.id || idKey, url: url, preview: g.preview, title: g.title || '' };
+            const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
+            if (res.ok) {
+              const j = await res.json().catch(()=>({}));
+              if (j.id) favoriteMap[idKey] = j.id;
+              favBtn.textContent = '♥';
+              updateGifFavUI(idKey);
+            }
+          }
+        };
+
+        const box = document.createElement('div');
+        box.style.position = 'relative';
+        box.style.display = 'inline-block';
+        box.style.width = '120px';
+        box.appendChild(thumb);
+        favBtn.style.position = 'absolute';
+        favBtn.style.right = '4px';
+        favBtn.style.top = '4px';
+        favBtn.style.padding = '2px 6px';
+        box.appendChild(favBtn);
+        grid.appendChild(box);
+      }
+    }
+
+  function getGifKeyFromResult(g) {
+    return String(g.id || g.gif_id ||  g.gifId || g.url || '');
+  }
+
+  function getGifKeyFromUrl(url) {
+    return String(url || '')
+  }
+
+  function renderGifGrid(results, grid){
     grid.innerHTML = '';
+    const token = localStorage.getItem('access_token');
+
     results.forEach(g => {
+      const url = g.url;
+      const gifKey = getGifKeyFromResult(g);
+
+      const wrapper = document.createElement('div');
+      wrapper.style.position = 'relative';
+      wrapper.style.margin = '6px';
+      wrapper.dataset.gifId = gifKey;
+
       const thumb = document.createElement('img');
       thumb.src = g.preview || g.url;
       thumb.style.width = '120px';
-      thumb.style.margin = '6px';
       thumb.style.cursor = 'pointer';
       thumb.title = g.title || '';
       thumb.onclick = () => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({ type:'message', content: g.url }));
-        gifPicker.style.display = 'none';
+        if (!socket || socket.readyState !== WebSocket.OPEN) { alert('Not connected'); return; }
+        socket.send(JSON.stringify({ type:"message", content: g.url }));
+        document.getElementById('gifPicker').style.display = 'none';
       };
-      grid.appendChild(thumb);
+      wrapper.appendChild(thumb);
+
+      // favorite button (top-right)
+      const favBtn = document.createElement('button');
+      favBtn.className = 'fav-btn';
+      const favRowId = favoriteMap[gifKey];
+      favBtn.textContent = favRowId ? '♥' : '♡';
+      favBtn.title = favRowId ? 'Unfavorite' : 'Favorite';
+      favBtn.style.position = 'absolute';
+      favBtn.style.top = '4px';
+      favBtn.style.right = '4px';
+      favBtn.style.padding = '4px';
+      favBtn.style.fontSize = '12px';
+
+      favBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!token) { alert('Log in to favorite GIFs'); return; }
+
+        if (favoriteMap[gifKey]) {
+          // unfavorite
+          const fid = favoriteMap[gifKey];
+          const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), {
+            method: 'DELETE',
+            headers: {'token': token}
+          });
+          if (res.ok) {
+            delete favoriteMap[gifKey];
+            favBtn.textContent = '♡';
+            favBtn.title = 'Favorite';
+            updateGifFavUI(gifKey);
+          } else {
+            alert('Failed to remove favorite');
+          }
+        } else {
+          // add favorite
+          const payload = {
+            gif_id: g.id || gifKey,
+            url: g.url,
+            preview: g.preview,
+            title: g.title,
+            metadata: g.metadata || {}
+          };
+          const res = await fetch('/gif/favorite', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json', 'token': token},
+            body: JSON.stringify(payload)
+          });
+          if (res.ok) {
+            const j = await res.json().catch(()=>({}));
+            // server returns {"ok": True, "id": <fav_row_id>}
+            if (j.id) {
+              favoriteMap[gifKey] = j.id;
+            } else {
+              favBtn.textContent = '♥';
+              favoriteMap[gifKey] = null;
+              updateGifFavUI(gifKey);
+            }
+          } else {
+            const j = await res.json().catch(()=>({}));
+            alert('Favorite failed: ' + (j.detail || JSON.stringify(j)));
+          }
+        }
+      };
+
+      wrapper.appendChild(favBtn);
+      grid.appendChild(wrapper);
     });
   }
+
 
   //Debounce Helper
   function debounce(fn, wait){
@@ -279,6 +688,8 @@ fetch('/static/emojis.json')
   //Reactions
   function openEmojiPicker(anchorEl, onChoose) {
     closeEmojiPicker();
+    if (!anchorEl) return;
+
     const picker = document.createElement('div');
     picker.id = 'emoji-picker';
     picker.style.position = 'absolute';
@@ -287,53 +698,68 @@ fetch('/static/emojis.json')
     picker.style.padding = '6px';
     picker.style.boxShadow = '0 6px 12px rgba(0,0,0,0.12)';
     picker.style.zIndex = 9999;
+    picker.style.maxWidth = '360px';
+    picker.style.maxHeight = '260px';
+    picker.style.overflow = 'auto';
 
     const input = document.createElement('input');
     input.placeholder = 'Search emoji...';
-    input.style.width = '200px';
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
     input.style.marginBottom = '6px';
-    picker.appendChild(input)
+    picker.appendChild(input);
 
     const grid = document.createElement('div');
     grid.style.display = 'flex';
     grid.style.flexWrap = 'wrap';
-    grid.style.gap = '6px'
+    grid.style.gap = '6px';
     picker.appendChild(grid);
 
     function renderGrid(filter='') {
-    grid.innerHTML = '';
-    const q = (filter || '').toLowerCase().trim();
-    const candidates = EMOJI_LIST.filter(ch => {
-      if (!q) return true;
-      // match char or alias name
-      if (ch.includes(q)) return true;
-      return Object.keys(EMOJI_ALIASES).some(a => EMOJI_ALIASES[a] === ch && a.includes(q));
-    }).slice(0, 120);
-    candidates.forEach(ch => {
-      const b = document.createElement('button');
-      b.textContent = ch;
-      b.style.fontSize = '18px';
-      b.onclick = () => { onChoose(ch); closeEmojiPicker(); };
-      grid.appendChild(b);
-    });
+      grid.innerHTML = '';
+      const q = (filter || '').toLowerCase().trim();
+      const candidates = EMOJI_LIST.filter(ch => {
+        if (!q) return true;
+        if (ch.includes(q)) return true;
+        return Object.keys(EMOJI_ALIASES).some(a => (EMOJI_ALIASES[a] === ch) && a.includes(q));
+      }).slice(0, 120);
+      candidates.forEach(ch => {
+        const b = document.createElement('button');
+        b.textContent = ch;
+        b.style.fontSize = '18px';
+        b.style.padding = '4px';
+        b.style.cursor = 'pointer';
+        b.onclick = () => { 
+          console.log('[emoji-picker] chosen', ch);
+          onChoose(ch); 
+          closeEmojiPicker(); 
+        };
+        grid.appendChild(b);
+      });
+    }
+
+    // wire input
+    input.addEventListener('input', e => renderGrid(e.target.value));
+    renderGrid();
+
+    document.body.appendChild(picker);
+
+    // position relative to anchorEl (best-effort)
+    try {
+      const r = anchorEl.getBoundingClientRect();
+      picker.style.left = `${Math.max(4, r.left)}px`;
+      picker.style.top = `${r.bottom + window.scrollY + 6}px`;
+    } catch (e) {
+      /* ignore positioning errors */
+    }
+
+    // outside-click removal
+    setTimeout(()=> window.addEventListener('click', outsideClick));
+    function outsideClick(e) {
+      if (!picker.contains(e.target) && e.target !== anchorEl) closeEmojiPicker();
+    }
+    picker._outsideFn = outsideClick;
   }
-  input.addEventListener('input', e => renderGrid(e.target.value));
-  renderGrid();
-
-  document.body.appendChild(picker);
-
-
-  // position
-  const r = anchorEl.getBoundingClientRect();
-  picker.style.left = `${r.left}px`;
-  picker.style.top = `${r.bottom + window.scrollY + 6}px`;
-
-  setTimeout(()=> window.addEventListener('click', outsideClick));
-  function outsideClick(e) {
-    if (!picker.contains(e.target) && e.target !== anchorEl) closeEmojiPicker();
-  }
-  picker._outsideFn = outsideClick;
-}
 
   function closeEmojiPicker() {
     const p = document.getElementById('emoji-picker');
@@ -342,6 +768,64 @@ fetch('/static/emojis.json')
       p.remove();
     }
   }
+
+  function openEditUI(messageId) {
+    const el = document.getElementById('msg-' + messageId);
+    if (!el) return;
+    const contentEl = el.querySelector('.content');
+    if (!contentEl) return;
+
+    // create textarea and Save/Cancel
+    const textarea = document.createElement('textarea');
+    textarea.style.width = '100%';
+    textarea.rows = 3;
+    textarea.value = (msgIndex[messageId] && msgIndex[messageId].content) || '';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+
+    // replace content element with editor
+    contentEl.innerHTML = '';
+    contentEl.appendChild(textarea);
+    contentEl.appendChild(saveBtn);
+    contentEl.appendChild(cancelBtn);
+
+    saveBtn.onclick = () => {
+      const newText = textarea.value.trim();
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert('Not connected');
+        return;
+      }
+      socket.send(JSON.stringify({ type: 'edit', id: messageId, content: newText }));
+      // optimistically update UI (server will broadcast too)
+      msgIndex[messageId].content = newText;
+      msgIndex[messageId].edited_at = new Date().toISOString();
+      // re-render node to restore normal view
+      const newNode = renderMessage(msgIndex[messageId]);
+      el.replaceWith(newNode);
+    };
+
+    cancelBtn.onclick = () => {
+      // restore existing content display
+      const newNode = renderMessage(msgIndex[messageId]);
+      el.replaceWith(newNode);
+    };
+  }
+
+
+  // position
+//  const r = anchorEl.getBoundingClientRect();
+//  picker.style.left = `${r.left}px`;
+//  picker.style.top = `${r.bottom + window.scrollY + 6}px`;
+//
+//  setTimeout(()=> window.addEventListener('click', outsideClick));
+//  function outsideClick(e) {
+//    if (!picker.contains(e.target) && e.target !== anchorEl) closeEmojiPicker();
+//  }
+//  picker._outsideFn = outsideClick;
+  
 
   function replaceAliasesInText(text) {
     return text.replace(/:([a-zA-Z0-9_+-]+):/g, (m, alias) => {
@@ -365,129 +849,280 @@ fetch('/static/emojis.json')
     document.getElementById('replyPreview').textContent = '';
   };
 
-  
+  // REGISTER: send JSON, store token/username, hide auth UI and auto-connect
+  document.getElementById('authRegister').onclick = async () => {
+    const u = document.getElementById('authUser').value.trim();
+    const p = document.getElementById('authPass').value;
+    if (!u || !p) return alert('enter username & password');
 
-  document.getElementById('connectBtn').onclick = () => {
-    if (socket) {
-      socket.close();
-      socket = null;
+    try {
+      const res = await fetch('/auth/register', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({username: u, password: p})
+      });
+      const j = await res.json();
+      console.log('register result', res.status, j);
+
+      if (res.ok && j.access_token) {
+        localStorage.setItem('access_token', j.access_token);
+        localStorage.setItem('username', j.username);
+        document.getElementById('authStatus').textContent = `Registered & logged in as ${j.username}`;
+        // hide auth UI
+        const authBox = document.getElementById('authBox');
+        if (authBox) authBox.style.display = 'none';
+        // auto-connect
+        try { await connectSocket(); } catch(e){ console.error('auto-connect failed', e); }
+      } else {
+        const err = (j && (j.detail || j.error)) ? (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) : JSON.stringify(j);
+        document.getElementById('authStatus').textContent = 'Register failed: ' + err;
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Register error — check server logs');
     }
-    myId = document.getElementById('clientId').value.trim();
-    if (!myId) {
-      alert('Please enter an ID (number or name) to connect with.');
+  };
+
+  // LOGIN: send JSON, store token/username, hide auth UI and auto-connect
+  document.getElementById('authLogin').onclick = async () => {
+    const u = document.getElementById('authUser').value.trim();
+    const p = document.getElementById('authPass').value;
+    if (!u || !p) return alert('enter username & password');
+
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ username: u, password: p })
+      });
+      const j = await res.json();
+      console.log('login response', res.status, j);
+
+      if (res.ok && j.access_token) {
+        localStorage.setItem('access_token', j.access_token);
+        localStorage.setItem('username', j.username);
+        document.getElementById('authStatus').textContent = `Logged in as ${j.username}`;
+
+        // hide auth UI
+        const authBox = document.getElementById('authBox');
+        if (authBox) authBox.style.display = 'none';
+
+        // auto-connect
+        try { await connectSocket(); } catch(e){ console.error('auto-connect failed', e); }
+
+      } else {
+        const err = (j && (j.detail || j.error)) ? (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) : JSON.stringify(j);
+        document.getElementById('authStatus').textContent = 'Login failed: ' + err;
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Login error — check server logs');
+    }
+  };
+  
+function resetChatUI(){
+  //Clear DOM
+  document.getElementById('container').innerHTML = '';
+  document.getElementById('pinsContainer').innerHTML = '';
+  document.getElementById('pinsContainer').style.display = 'none';
+  document.getElementById('viewPinsBtn').textContent = 'View Pins';
+
+  // Clear client state
+  for (const k in msgIndex) delete msgIndex[k];
+  replyTo = null;
+
+  // Clear input
+  const input = document.getElementById('inputText');
+  if (input) input.value = '';
+
+  // Hide reply box
+  document.getElementById('replyBox').style.display = 'none';
+  document.getElementById('replyPreview').textContent = '';
+}
+
+// centralized connect function
+async function connectSocket() {
+  // if already connected, do nothing (or optionally re-open)
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    console.log("WebSocket already open");
+    return;
+  }
+
+  const token = localStorage.getItem('access_token');
+  const storedUsername = localStorage.getItem('username');
+  myId = storedUsername || null;
+
+  if (!token || !myId) {
+    document.getElementById('status').textContent = 'Not logged in';
+    return;
+  }
+
+  // create WS and install handlers
+  const wsUrl = `ws://127.0.0.1:8000/ws?token=${encodeURIComponent(token)}`;
+  document.getElementById('status').textContent = 'Connecting...';
+  socket = new WebSocket(wsUrl);
+
+  socket.addEventListener('open', () => {
+    document.getElementById('status').textContent = 'Connected as ' + myId;
+
+    // load favorite gifs
+    loadFavoriteMap().then(() => {
+      Object.values(msgIndex).forEach(m => {
+        const key = getGifProviderKeyFromUrl(m.content || '');
+        if (key) updateGifFavUI(key);
+      });
+    });
+
+    // Show chat UI
+    document.getElementById('chatUI').style.display = 'block';
+
+    // Hide auth UI
+    document.getElementById('authBox').style.display = 'none';
+
+    // Show logout
+    document.getElementById('logoutBtn').style.display = 'inline-block';
+
+    // Disable connect
+    document.getElementById('connectBtn').disabled = true;
+  });
+
+  socket.addEventListener('close', (ev) => {
+    document.getElementById('status').textContent = 'Disconnected';
+    console.log('WS closed', ev);
+  });
+
+  socket.addEventListener('error', (ev) => {
+    console.error('WS error', ev);
+  });
+
+  window.addEventListener('DOMContentLoaded', () => {
+  const token = localStorage.getItem('access_token');
+  const user = localStorage.getItem('username');
+
+  if (token && user) {
+    connectSocket(); // will show chatUI
+  } else {
+    document.getElementById('chatUI').style.display = 'none';
+    document.getElementById('authBox').style.display = 'block';
+  }
+});
+
+
+  socket.addEventListener('message', (ev) => {
+    // server sends JSON payloads
+    console.log('WS incoming payload:', ev.data);
+
+    let payload;
+    try {
+      payload = JSON.parse(ev.data);
+    } catch (e) {
+      console.warn('Non-JSON message', ev.data);
       return;
     }
-    const wsUrl = `ws://127.0.0.1:8000/ws/${encodeURIComponent(myId)}`;
-    document.getElementById('status').textContent = 'Connecting...';
-    socket = new WebSocket(wsUrl);
 
-    socket.addEventListener('open', () => {
-      document.getElementById('status').textContent = 'Connected as ' + myId;
-    });
-
-    socket.addEventListener('close', () => {
-      document.getElementById('status').textContent = 'Disconnected';
-    });
-
-    socket.addEventListener('message', (ev) => {
-      // server sends JSON payloads
-      console.log('WS incoming payload:', ev.data);
-
-      let payload;
-      try {
-        payload = JSON.parse(ev.data);
-      } catch (e) {
-        console.warn('Non-JSON message', ev.data);
-        return;
-      }
-
-      if (payload.type === 'history') {
-        // initial history array
-        const msgs = payload.messages || [];
-        const container = document.getElementById('container');
-        container.innerHTML = ''; // clear
-        msgs.forEach(m => {
-          const node = renderMessage(m);
-          showMessageElement(node);
-        });
-        return;
-      }
-
-      if (payload.type === 'message') {
-        // render message
-        const node = renderMessage(payload);
+    if (payload.type === 'history') {
+      const msgs = payload.messages || [];
+      const container = document.getElementById('container');
+      container.innerHTML = ''; // clear
+      msgs.forEach(m => {
+        const node = renderMessage(m);
         showMessageElement(node);
-        return;
-      }
+      });
+      return;
+    }
 
-      if (payload.type === 'delete') {
-        const id = payload.id;
+    if (payload.type === 'message') {
+      const node = renderMessage(payload);
+      showMessageElement(node);
+      return;
+    }
+
+    if (payload.type === 'delete') {
+      const id = payload.id;
+      const el = document.getElementById('msg-' + id);
+      if (el) {
+        const content = el.querySelector('.content');
+        if (content) {
+          content.textContent = '(message deleted)';
+          content.classList.add('deleted');
+        }
+      }
+      if (msgIndex[id]) msgIndex[id].deleted = true;
+      return;
+    }
+
+    if (payload.type === 'pin') {
+      const id = payload.id;
+      const msg = msgIndex[id];
+      if (msg) {
+        msg.pinned = payload.pinned;
+        msg.pinned_by = payload.pinned_by || null;
+        msg.pinned_at = payload.pinned_at || null;
         const el = document.getElementById('msg-' + id);
         if (el) {
-          const content = el.querySelector('.content');
-          if (content) {
-            content.textContent = '(message deleted)';
-            content.classList.add('deleted');
-          }
+          const newNode = renderMessage(msg);
+          el.replaceWith(newNode);
         }
-        // update index if present
-        if (msgIndex[id]) msgIndex[id].deleted = true;
-        return;
       }
+      return;
+    }
 
-      if (payload.type === 'pin') {
-        //update local message object/UI
-        const id = payload.id;
-        const msg = msgIndex[id];
-        if (msg) {
-          msg.pinned = payload.pinned;
-          msg.pinned_by = payload.pinned_by || null;
-          msg.pinned_at = payload.pinned_at || null;
-
-          const el = document.getElementById('msg-' + id);
-          if (el) {
-            // update text of pin button (simple approach: rebuild actions area)
-            const newNode = renderMessage(msg);
-            el.replaceWith(newNode);
-          }
+    if (payload.type === 'edit') {
+      const id = payload.id;
+      const content = payload.content;
+      const edited_at = payload.edited_at;
+      const msg = msgIndex[id];
+      if (msg) {
+        msg.content = content;
+        msg.edited_at = edited_at;
+        const el = document.getElementById('msg-' + id);
+        if (el) {
+          const newNode = renderMessage(msg);
+          el.replaceWith(newNode);
         }
-        return;
       }
+      return;
+    }
 
-      if (payload.type === 'react') {
-        const id = payload.id;
-        const emoji = payload.emoji;
-        const users = payload.users || [];
-        const msg = msgIndex[id];
-        if (msg) {
-          msg.reactions = msg.reactions || {};
-          if (!Array.isArray(users) || users.length === 0) {
-            delete msg.reactions[emoji];
-          } else {
-            msg.reactions[emoji] = users;
-          }
-          const el = document.getElementById('msg-' + id);
-          if (el) {
-            const newNode = renderMessage(msg);
-            el.replaceWith(newNode);
-          }
+    if (payload.type === 'react') {
+      const id = payload.id;
+      const emoji = payload.emoji;
+      const users = payload.users || [];
+      const msg = msgIndex[id];
+      if (msg) {
+        msg.reactions = msg.reactions || {};
+        if (!Array.isArray(users) || users.length === 0) {
+          delete msg.reactions[emoji];
+        } else {
+          msg.reactions[emoji] = users;
         }
-        return;
+        const el = document.getElementById('msg-' + id);
+        if (el) {
+          const newNode = renderMessage(msg);
+          el.replaceWith(newNode);
+        }
       }
+      return;
+    }
 
-      if (payload.type === 'error') {
-        alert('Server error: ' + (payload.error || 'unknown'));
-        return;
-      }
+    if (payload.type === 'error') {
+      alert('Server error: ' + (payload.error || 'unknown'));
+      return;
+    }
 
-      // handle other server types (notice, reply_preview etc)
-      if (payload.type === 'notice') {
-        const n = document.createElement('div');
-        n.textContent = payload.text;
-        showMessageElement(n);
-      }
-    });
-  };
+    if (payload.type === 'notice') {
+      const n = document.createElement('div');
+      n.textContent = payload.text;
+      showMessageElement(n);
+    }
+  });
+}
+
+// minimal connect button behavior now calls connectSocket()
+document.getElementById('connectBtn').onclick = () => {
+  connectSocket();
+};
+
 
   document.getElementById('submitButton').onclick = () => {
     const input = document.getElementById('inputText');
@@ -547,6 +1182,37 @@ fetch('/static/emojis.json')
       content: data.url
     }));
   };
+
+document.getElementById('logoutBtn').onclick = () => {
+  if (socket) {
+    try { socket.close(); } catch(e){}
+    socket = null;
+  }
+
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('username');
+
+  // Reset UI + state
+  resetChatUI();
+
+  // Hide chat UI
+  document.getElementById('chatUI').style.display = 'none';
+
+  // Show auth UI
+  document.getElementById('authBox').style.display = 'block';
+
+  document.getElementById('status').textContent = 'Logged out';
+
+  // Hide logout
+  document.getElementById('logoutBtn').style.display = 'none';
+
+  // Enable connect
+  document.getElementById('connectBtn').disabled = false;
+};
+
+  // hide logout at initial load
+  const lb = document.getElementById('logoutBtn');
+  if (lb) lb.style.display = 'none';
 
 </script>
 </body>
