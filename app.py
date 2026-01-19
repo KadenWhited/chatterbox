@@ -24,6 +24,9 @@ from fastapi import Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 #Security/Webhosting
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from fastapi import Response
 #----------------------------------------------------------------------------------------------
 
 
@@ -31,6 +34,19 @@ from fastapi.concurrency import run_in_threadpool
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 def get_db():
     db = SessionLocal()
@@ -45,6 +61,8 @@ EMOJI_LIST = []
 EMOJI_ALIASES = {}
 
 MAX_PINNED = 100
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 def load_emojis():
@@ -152,13 +170,20 @@ def query_giphy_search(q: str, limit: int = 20, offset: int = 0):
     if not GIPHY_KEY:
         print("[gif] Warning: GIPHY_API_KEY not set")
         return {"data": []}
+    
     cache_key = f"giphy:search:{q}:{limit}:{offset}"
     if cache_key in gif_search_cache:
         return gif_search_cache[cache_key]
+    
     url = "https://api.giphy.com/v1/gifs/search"
     params = {"api_key": GIPHY_KEY, "q": q, "limit": limit, "offset": offset, "rating":"r", "lang":"en"}
-    r = requests.get(url, params=params, timeout=5)
-    result = r.json() if r.status_code == 200 else {"data": []}
+
+    try:
+        r = requests.get(url, params=params, timeout=5)
+        result = r.json() if r.status_code == 200 else {"data": []}
+    except Exception:
+        result = {"data": []}
+
     gif_search_cache[cache_key] = result
     return result
 
@@ -205,6 +230,14 @@ connectionmanager = ConnectionManager()
 class RegisterRequest(BaseModel):
     username: str
     password: str
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    resp: Response = await call_next(request)
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer-when-downgrade"
+    return resp
 
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db=Depends(get_db)):
@@ -256,15 +289,22 @@ def login(payload: RegisterRequest, db=Depends(get_db)):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    filename = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}" #sanitize
+    filename = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}"
     dest = UPLOAD_DIR / filename
-
-    #write asynchronously
+    total = 0
     async with aiofiles.open(dest, "wb") as out_file:
-        content = await file.read()          #read uploaded contents
-        await out_file.write(content)        #write to disk
-
-    #return a URL clients can use
+        while True:
+            chunk = await file.read(1024 * 64)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                await out_file.close()
+                # delete partial file
+                try: dest.unlink()
+                except Exception: pass
+                raise HTTPException(status_code=413, detail="File too large")
+            await out_file.write(chunk)
     return {"url": f"/static/uploads/{filename}", "filename": filename}
 
 @app.post("/preview")
