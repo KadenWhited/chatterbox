@@ -5,13 +5,235 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>ChatterBox</title>
-  <style>
-    .message { border-bottom: 1px solid #eee; padding:6px 0; }
-    .meta { font-size:0.85em; color:#777; }
-    .deleted { color:#999; font-style:italic; }
-    .quote { background:#f7f7f7; padding:6px; border-left:3px solid #ccc; margin-bottom:6px; }
-    button { margin-left:8px; }
-  </style>
+    <style>
+    :root{
+      --bg:#0f1115;
+      --panel:#111216;
+      --muted:#9aa0a6;
+      --accent:#4f9fff;
+      --text:#f6f7f9;
+      --subtle:#2a2d31;
+      --composer-height:84px;
+    }
+
+    html,body {
+      height:100%;
+      margin:0;
+      font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      background:var(--bg);
+      color:var(--text);
+      /* IMPORTANT: force outer document not to scroll so only .chat-wrapper scrolls */
+      overflow: hidden;
+    }
+    h1 { margin:12px; color:var(--text); font-size:20px; }
+
+    /* Header pinned top */
+    .app-header {
+      position:sticky;
+      top:0;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      padding:8px 12px;
+      background: var(--panel);
+      border-bottom:1px solid rgba(255,255,255,0.03);
+      z-index:30;
+    }
+    .header-left { display:flex; align-items:center; gap:8px; }
+    .header-username { font-weight:600; color:var(--text); }
+    .header-right { display:flex; align-items:center; gap:8px; }
+
+    /* Buttons */
+    .btn-small { background:transparent; color:var(--text); border:1px solid rgba(255,255,255,0.04); padding:6px 8px; border-radius:6px; cursor:pointer; }
+    .btn-primary { background:var(--accent); color:#041427; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+
+    /* chat area (same) */
+    .chat-wrapper {
+      padding:12px;
+      padding-bottom: calc(var(--composer-height) + 24px);
+      /* full area uses internal scrolling only */
+      height: calc(100vh - var(--composer-height) - 80px); /* explicit usable height */
+      overflow:auto;
+    }
+    .status-line { font-size:13px; color:var(--muted); margin-bottom:6px; }
+
+    .messages { display:flex; flex-direction:column; gap:8px; }
+
+    /* Message */
+    .message {
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+      background: linear-gradient(180deg, rgba(255,255,255,0.005), rgba(255,255,255,0.002));
+      padding:8px;
+      border-radius:8px;
+      border:1px solid rgba(255,255,255,0.02);
+      position:relative;
+    }
+    .avatar { width:40px; height:40px; border-radius:50%; background:var(--subtle); color:var(--text); display:flex; align-items:center; justify-content:center; font-weight:700; }
+    .avatar.small { width:32px; height:32px; font-size:12px; }
+
+    .message-body { flex:1; min-width:0; }
+    .meta { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); margin-bottom:6px; }
+    .meta .name { color:var(--text); font-weight:600; }
+    .meta .time { color:var(--muted); font-size:12px; }
+
+    .edited { color:var(--muted); font-size:12px; margin-left:6px; font-style:italic; }
+
+    .content { color:var(--text); line-height:1.35; word-break:break-word; }
+
+    .quote { background:#0c0d0f; padding:6px; border-left:3px solid #222; margin-bottom:6px; color:var(--muted); border-radius:6px; }
+
+    /* Reactions stay visible — actions hide into menu */
+    .reactions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+    .reactions button { color:var(--text); border:1px solid rgba(255,255,255,0.03); padding:4px 6px; border-radius:6px; cursor:pointer; background:transparent; }
+
+    /* Actions under message are hidden (moved into contextual menu) */
+    .message .msg-actions { display:none; }
+
+    /* ellipsis button appears on hover */
+    .msg-menu-btn {
+      display:none;
+      position:absolute;
+      right:8px;
+      top:8px;
+      background:transparent;
+      border:none;
+      color:var(--muted);
+      font-size:18px;
+      cursor:pointer;
+    }
+    .message:hover .msg-menu-btn { display:inline-block; }
+
+    /* lighten message slightly on hover so cursor movement is visible */
+    .message:hover {
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+      transition: filter 120ms ease, transform 120ms ease;
+      cursor: default;
+    }
+
+    /* Context menu styling */
+    .context-menu {
+      position:absolute;
+      background:var(--panel);
+      border:1px solid rgba(255,255,255,0.04);
+      padding:6px;
+      border-radius:8px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.6);
+      z-index:60;
+      min-width:160px;
+    }
+    .context-menu button {
+      display:block;
+      width:100%;
+      text-align:left;
+      background:transparent;
+      border:none;
+      color:var(--text);
+      padding:8px;
+      cursor:pointer;
+      border-radius:6px;
+    }
+    .context-menu button:hover { background:rgba(255,255,255,0.02); }
+
+    /* Composer pinned */
+    .composer {
+      position:fixed;
+      left:12px;
+      right:12px;
+      bottom:12px;
+      height:var(--composer-height);
+      display:flex;
+      gap:8px;
+      padding:10px;
+      align-items:center;
+      background: var(--panel);           /* solid panel */
+      border:1px solid rgba(255,255,255,0.02);
+      border-radius:10px;
+      z-index:40;
+    }
+    .composer-left, .composer-right { display:flex; gap:8px; align-items:center; }
+    .composer-middle { flex:1; }
+    #inputText { width:100%; height:100%; resize:none; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.03); color:var(--text); outline:none; background:transparent; }
+
+    /* pinned reply box just above composer */
+    .reply-box, #replyBox {
+      position:fixed;
+      left:12px;
+      right:12px;
+      bottom: calc(var(--composer-height) + 18px);
+      background: var(--panel);
+      padding:8px 12px;
+      border-radius:8px;
+      border:1px solid rgba(255,255,255,0.03);
+      color:var(--text);
+      z-index:42;
+      display:flex;
+      align-items:center;
+      gap:12px;
+    }
+
+    /* highlight referenced message so user sees context */
+    .message.referenced {
+      outline: 2px solid rgba(79,159,255,0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.008));
+      transition: background 180ms ease, outline 180ms ease;
+    }
+
+    input[type="file"] { color:var(--text); }
+
+    /* Pins panel */
+    .pins-panel { position:fixed; right:12px; bottom:calc(var(--composer-height) + 24px); width:360px; max-height:50vh; overflow:auto; background:var(--panel); border:1px solid rgba(255,255,255,0.03); padding:8px; border-radius:8px; z-index:45; }
+
+    /* GIF picker layout & pinned header */
+    #gifPicker {
+      background: var(--panel);
+      color: var(--text);
+      border:1px solid rgba(255,255,255,0.03);
+      padding: 0;                /* header supplies padding */
+      border-radius:8px;
+      box-shadow:0 12px 36px rgba(0,0,0,0.6);
+      z-index: 9999;
+      overflow: hidden;         /* inner grid scrolls */
+      max-width: 560px;
+      width: min(46vw, 540px);
+    }
+
+    /* header pinned to the top of the picker (stays visible) */
+    #gifPicker .picker-header {
+      position: sticky;
+      top: 0;
+      display:flex;
+      gap:8px;
+      align-items:center;
+      padding:8px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,0.02);
+      z-index: 3;
+    }
+
+    /* the grid area scrolls independently */
+    #gifPicker #gifGrid {
+      padding: 8px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      overflow:auto;
+      max-height: 52vh; /* will be dynamically clamped by JS too */
+    }
+
+    /* small tweak so picker right edge lines up visually with button */
+    #gifPicker.align-right { transform-origin: top right; }
+
+    .message .msg-actions {display:none; }
+
+    /* small helpers */
+    .btn-small:active, .btn-primary:active { transform:translateY(1px); }
+    a { color:var(--accent); }
+    .messages-end-spacer { height: calc(var(--composer-height) + 5px); flex-shrink:0; }
+    </style>
 </head>
 
 <body>
@@ -26,35 +248,56 @@
   </div>
 
   <div id="chatUI" style="display:none;">
+    <!-- Header (pinned top after login) -->
+    <header id="appHeader" class="app-header" style="display:none;">
+      <div class="header-left">
+        <div id="headerAvatar" class="avatar small">?</div>
+        <div id="headerUsername" class="header-username"></div>
+      </div>
+      <div class="header-right">
+        <button id="viewPinsBtn" class="btn-small">Pins</button>
+        <button id="connectBtn" class="btn-small">Connect</button>
+        <button id="logoutBtn" class="btn-small">Logout</button>
+      </div>
+    </header>
 
-  <button id="connectBtn">Connect</button>
-  <button id="logoutBtn" style="margin-left:8px;">Logout</button>
+    <!-- Main chat area -->
+    <main class="chat-wrapper">
+      <div id="status" class="status-line"></div>
+      <div id="container" class="messages"></div>
+    </main>
 
-  <div id="status"></div>
-  <div id="container"></div>
+    <!-- Pins panel toggled via View Pins -->
+    <div id="pinsPanel" class="pins-panel" style="display:none;">
+      <button id="closePins" class="btn-small">Close</button>
+      <div id="pinsContainer" class="pinsContainer"></div>
+    </div>
 
-  <button id="viewPinsBtn">View Pins</button>
-  <div id="pinsContainer"
-    style="display:none; border:1px solid #ddd; padding:8px; margin:8px 0;"></div>
+    <!-- Reply preview small area above composer -->
+    <div id="replyBox" class="reply-box" style="display:none;">
+      Replying to: <span id="replyPreview"></span>
+      <button id="cancelReply">Cancel</button>
+    </div>
 
-  <div id="replyBox" style="display:none;">
-    Replying to: <span id="replyPreview"></span>
-    <button id="cancelReply">Cancel</button>
+    <!-- Composer (pinned to bottom) -->
+    <div id="composer" class="composer">
+      <div class="composer-left">
+        <input id="fileInput" type="file" accept="image/*" title="Attach file" />
+        
+      </div>
+      <div class="composer-middle">
+        <textarea id="inputText" placeholder="Type a message..." rows="2"></textarea>
+      </div>
+      <div class="composer-right">
+        <button id="gifBtn" title="GIF">GIF</button>
+        <button id="submitButton" class="btn-primary">Send</button>
+      </div>
+    </div>
+
+    <!-- GIF picker (positioning unchanged) -->
+    <div id="gifPicker" style="display:none; position:absolute; background:#424549; border:1px solid #2cff05; max-width:450px; max-height:360px; overflow:auto;"></div>
   </div>
 
-  <textarea id="inputText" placeholder="Type a message..."
-    rows="3" style="width:100%"></textarea><br/>
-
-  <input type="file" id="fileInput" accept="image/*">
-
-  <button id="gifBtn">GIF</button>
-  <div id="gifPicker"
-    style="display:none; position:absolute; background:white; border:1px solid #ccc;
-      max-width:640px; max-height:360px; overflow:auto;"></div>
-
-  <button id="submitButton">Submit</button>
-
-</div>
 
 <script>
   let socket = null;
@@ -135,12 +378,27 @@
   })
   .catch(err => {
     console.warn('Could not load emojis.json:', err);
-    // fallback to a small local set if you want:
-    EMOJI_LIST = ["👍","❤️","😂"];
-    EMOJI_ALIASES = {"thumbs_up":"👍", "heart":"❤️", "laugh":"😂"};
   });
 
   let favoriteMap = {}; // gif_provider_id -> favorite_row_id
+
+  window._referencedMsgId = null;
+
+  function clearReferencedHighlight() {
+    if (window._referencedMsgId) {
+      const prev = document.getElementById('msg-' + window._referencedMsgId);
+      if (prev) prev.classList.remove('referenced');
+      window._referencedMsgId = null;
+    }
+  }
+  function highlightReferencedMsg(id) {
+    clearReferencedHighlight();
+    const el = document.getElementById('msg-' + id);
+    if (el) {
+      el.classList.add('referenced');
+      window._referencedMsgId = id;
+    }
+  }
 
   async function loadFavMap() {
     favoriteMap = {};
@@ -158,158 +416,199 @@
     }
   }
   
+  function isContainerNearBottom(wrapperEl, threshold = 60) {
+    // threshold in px
+    return (wrapperEl.scrollHeight - wrapperEl.scrollTop - wrapperEl.clientHeight) <= threshold;
+  }
+
+  function scrollWrapperToBottom(wrapperEl) {
+    wrapperEl.scrollTop = wrapperEl.scrollHeight;
+  }
+
+  function ensureEndSpacer(container){
+  // ensure there is a spacer as last child so the composer doesn't cover last message
+  if (!container) return;
+  const last = container.lastElementChild;
+  if (!last || !last.classList || !last.classList.contains('messages-end-spacer')) {
+    const spacer = document.createElement('div');
+    spacer.className = 'messages-end-spacer';
+    container.appendChild(spacer);
+  }
+}
+
   function showMessageElement(el) {
     const container = document.getElementById('container');
+    if (!container) {
+      document.body.appendChild(el);
+      return;
+    }
+
+    const wrapper = container.closest('.chat-wrapper') || document.querySelector('.chat-wrapper') || container;
+    const wasNearBottom = isContainerNearBottom(wrapper, 50);
+
+    // remove previous spacer before appending so we always append messages before spacer
+    const existingSpacer = container.querySelector('.messages-end-spacer');
+    if (existingSpacer) existingSpacer.remove();
+
     container.appendChild(el);
-    container.scrollTop = container.scrollHeight;
+    // re-add spacer at the end
+    ensureEndSpacer(container);
+
+    if (wasNearBottom) {
+      setTimeout(() => scrollWrapperToBottom(wrapper), 8);
+    }
   }
 
   function renderMessage(msg, isLocalEcho=false) {
-    // store locally
-    msgIndex[msg.id] = msg;
+  // if message flagged deleted, skip rendering (safety)
+  if (msg.deleted) return document.createElement('div');
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'message';
-    wrapper.id = 'msg-' + msg.id;
+  msgIndex[msg.id] = msg;
 
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const time = new Date(msg.timestamp).toLocaleString();
-    meta.textContent = `${msg.author} • ${time} • id:${msg.id}`;
-    // show edited marker if present
-    if (msg.edited_at) {
-      const editedSpan = document.createElement('span');
-      editedSpan.style.marginLeft = '6px';
-      editedSpan.style.fontStyle = 'italic';
-      editedSpan.style.color = '#777';
-      editedSpan.textContent = '(edited)';
-      meta.appendChild(editedSpan);
-    }
-    wrapper.appendChild(meta);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message';
+  wrapper.id = 'msg-' + msg.id;
 
-    // quoted message preview (reply_to)
-    if (msg.reply_to) {
-      const q = document.createElement('div');
-      q.className = 'quote';
-      const quoted = msgIndex[msg.reply_to];
-      if (quoted) q.textContent = quoted.deleted ? "(original deleted)" : quoted.content;
-      else q.textContent = "(quoted message not loaded)";
-      wrapper.appendChild(q);
-    }
+  // avatar
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = (msg.author && msg.author[0]) ? msg.author[0].toUpperCase() : '?';
 
-    const content = document.createElement('div');
-    content.className = 'content';
+  // body (meta + content)
+  const body = document.createElement('div');
+  body.className = 'message-body';
 
-    // show content (or deleted placeholder)
-    if (!msg.deleted) {
-      const text = (msg.content || "").toString();
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'name';
+  nameSpan.textContent = msg.author;
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'time';
+  try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent = ''; }
+  meta.appendChild(nameSpan);
+  meta.appendChild(timeSpan);
+  if (msg.edited_at) {
+    const editedSpan = document.createElement('span');
+    editedSpan.className = 'edited';
+    editedSpan.textContent = '(edited)';
+    meta.appendChild(editedSpan);
+  }
+  body.appendChild(meta);
 
-      if (isImageUrl(text)) {
-        const img = document.createElement('img');
-        img.src = text;
-        img.style.maxWidth = '300px';
-        img.style.borderRadius = '6px';
-        content.appendChild(img);
-
-        // per-message favorite button
-        const gifKey = getGifKeyFromUrl(text);
-        const favBtn = document.createElement('button');
-        favBtn.className = 'gif-fav-btn';
-        const favId = favoriteMap[gifKey];
-        favBtn.textContent = favId ? '♥' : '♡';
-        favBtn.title = favId ? 'Unfavorite' : 'Favorite';
-        favBtn.style.marginLeft = '8px';
-
-        favBtn.onclick = async (e) => {
-          e.stopPropagation();
-          const token = localStorage.getItem('access_token');
-          if (!token) { alert('Log in to favorite GIFs'); return; }
-
-          if (favoriteMap[gifKey]) {
-            const fid = favoriteMap[gifKey];
-            const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), {
-              method: 'DELETE',
-              headers: {'token': token}
-            });
-            if (res.ok) {
-              delete favoriteMap[gifKey];
-              favBtn.textContent = '♡';
-              favBtn.title = 'Favorite';
-              updateGifFavUI(gifKey);
-            } else {
-              alert('Failed to remove favorite');
-            }
-          } else {
-            const payload = { gif_id: text, url: text, preview: text, title: '' };
-            const res = await fetch('/gif/favorite', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json', 'token': token},
-              body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-              const j = await res.json().catch(()=>({}));
-              if (j.id) favoriteMap[gifKey] = j.id;
-              favBtn.textContent = '♥';
-              favBtn.title = 'Unfavorite';
-              updateGifFavUI(gifKey);
-            } else {
-              const j = await res.json().catch(()=>({}));
-              alert('Favorite failed: ' + (j.detail || JSON.stringify(j)));
-            }
-          }
-        };
-
-        content.appendChild(favBtn);
-
-      } else if (isVideoUrl(text)) {
-        const vid = document.createElement('video');
-        vid.src = text;
-        vid.controls = true;
-        vid.style.maxWidth = '400px';
-        content.appendChild(vid);
-
-      } else {
-        content.innerHTML = marked.parse(text);
+  // --- inline reply preview (clickable) ---
+  if (msg.reply_to) {
+    const qr = document.createElement('div');
+    qr.className = 'inline-reply-preview';
+    qr.style.background = '#0b0c0e';
+    qr.style.padding = '6px';
+    qr.style.borderLeft = '3px solid rgba(255,255,255,0.03)';
+    qr.style.borderRadius = '6px';
+    qr.style.marginBottom = '6px';
+    qr.style.color = 'var(--muted)';
+    qr.style.fontSize = '13px';
+    qr.style.cursor = 'pointer';
+    // show short preview from local cache if available, else placeholder
+    const quoted = msgIndex[msg.reply_to];
+    qr.textContent = quoted ? ((quoted.deleted ? '(original deleted)' : (String(quoted.content || '').slice(0,120)))) : '(quoted message)';
+    // click -> scroll to referenced message
+    qr.onclick = (ev) => {
+      ev.stopPropagation();
+      const target = document.getElementById('msg-' + msg.reply_to);
+      const wrapper = document.querySelector('.chat-wrapper');
+      if (target && wrapper) {
+        // smooth scroll target into center of wrapper
+        const targetTop = target.offsetTop;
+        const centerOffset = Math.round((wrapper.clientHeight / 2) - (target.clientHeight / 2));
+        wrapper.scrollTo({ top: Math.max(0, targetTop - centerOffset), behavior: 'smooth' });
+        // briefly highlight to give feedback
+        target.classList.add('referenced');
+        setTimeout(()=> target.classList.remove('referenced'), 1400);
       }
+    };
+    body.appendChild(qr);
+  }
 
-    } else {
-      content.textContent = "(message deleted)";
-      content.classList.add('deleted');
-    }
 
-    wrapper.appendChild(content);
+  const content = document.createElement('div');
+  content.className = 'content';
 
-    // Reactions bar
-    const reactionsBar = document.createElement('div');
-    reactionsBar.className = 'reactions';
-    if (msg.reactions && typeof msg.reactions === 'object') {
-      Object.entries(msg.reactions).forEach(([emoji, users]) => {
-        const rbtn = document.createElement('button');
-        rbtn.textContent = `${emoji} ${Array.isArray(users) ? users.length : 0}`;
-        rbtn.onclick = () => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-          socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
-        };
-        reactionsBar.appendChild(rbtn);
-      });
-    }
+  const text = (msg.content || "").toString();
+  if (isImageUrl(text)) {
+    const img = document.createElement('img');
+    img.src = text;
+    img.style.maxWidth = '300px';
+    img.style.borderRadius = '6px';
+    content.appendChild(img);
 
-    const addReactBtn = document.createElement('button');
-    addReactBtn.textContent = '+';
-    addReactBtn.title = 'Add reaction';
-    addReactBtn.onclick = (ev) => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      openEmojiPicker(addReactBtn, (emoji) => {
-        socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
-      });
-      ev.stopPropagation?.();
+    // GIF favorite button (if you have favorites)
+    const gifKey = getGifKeyFromUrl(text);
+    const favBtn = document.createElement('button');
+    favBtn.className = 'gif-fav-btn';
+    const favId = favoriteMap[gifKey];
+    favBtn.textContent = favId ? '♥' : '♡';
+    favBtn.title = favId ? 'Unfavorite' : 'Favorite';
+    favBtn.style.marginLeft = '8px';
+    favBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const token = localStorage.getItem('access_token');
+      if (!token) { alert('Log in to favorite GIFs'); return; }
+      if (favoriteMap[gifKey]) {
+        const fid = favoriteMap[gifKey];
+        const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
+        if (res.ok) { delete favoriteMap[gifKey]; updateGifFavUI(gifKey); favBtn.textContent='♡'; }
+      } else {
+        const payload = { gif_id: text, url: text, preview: text, title: '' };
+        const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
+        if (res.ok) {
+          const j = await res.json().catch(()=>({}));
+          if (j.id) favoriteMap[gifKey] = j.id;
+          favBtn.textContent='♥';
+          updateGifFavUI(gifKey);
+        }
+      }
+    };
+    content.appendChild(favBtn);
+
+  } else if (isVideoUrl(text)) {
+    const vid = document.createElement('video');
+    vid.src = text;
+    vid.controls = true;
+    vid.style.maxWidth = '400px';
+    content.appendChild(vid);
+  } else {
+    content.innerHTML = marked.parse(text);
+  }
+
+  body.appendChild(content);
+
+  // reactions area
+  const reactionsBar = document.createElement('div');
+  reactionsBar.className = 'reactions';
+  if (msg.reactions && typeof msg.reactions === 'object') {
+    Object.entries(msg.reactions).forEach(([emoji, users]) => {
+      const rbtn = document.createElement('button');
+      rbtn.textContent = `${emoji} ${Array.isArray(users) ? users.length : 0}`;
+      rbtn.onclick = () => { if (!socket || socket.readyState !== WebSocket.OPEN) return; socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji })); };
+      reactionsBar.appendChild(rbtn);
+    });
+  }
+
+  const addReactBtn = document.createElement('button');
+  addReactBtn.textContent = '+';
+  addReactBtn.title = 'Add reaction';
+  addReactBtn.onclick = (ev) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    openEmojiPicker(addReactBtn, (emoji) => { socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji })); });
+    ev.stopPropagation?.();
     };
     reactionsBar.appendChild(addReactBtn);
+    body.appendChild(reactionsBar);
 
-    wrapper.appendChild(reactionsBar);
-
-    // Actions (pin/copy/reply/delete/edit)
+    // actions (pin/copy/reply/delete/edit) - keep small and unobtrusive
     const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    actions.style.marginTop = '6px';
 
     const pinBtn = document.createElement('button');
     pinBtn.textContent = msg.pinned ? 'Unpin' : 'Pin';
@@ -317,21 +616,13 @@
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       const pinFlag = !msg.pinned;
       socket.send(JSON.stringify({ type: 'pin', id: msg.id, pin: pinFlag }));
-      msg.pinned = pinFlag;
-      pinBtn.textContent = pinFlag ? 'Unpin' : 'Pin';
     };
     actions.appendChild(pinBtn);
 
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy';
     copyBtn.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(msg.content || '');
-        copyBtn.textContent = 'Copied!';
-        setTimeout(()=> copyBtn.textContent = 'Copy', 900);
-      } catch (e) {
-        alert('Copy failed: ' + e);
-      }
+      try { await navigator.clipboard.writeText(msg.content || ''); copyBtn.textContent='Copied!'; setTimeout(()=>copyBtn.textContent='Copy',900); } catch(e){ alert('Copy failed: '+e); }
     };
     actions.appendChild(copyBtn);
 
@@ -340,24 +631,110 @@
     replyBtn.onclick = () => startReply(msg.id);
     actions.appendChild(replyBtn);
 
-    if (msg.author === myId && !msg.deleted) {
+    if (msg.author === myId) {
       const delBtn = document.createElement('button');
       delBtn.textContent = 'Delete';
-      delBtn.onclick = () => {
-        socket.send(JSON.stringify({ type: 'delete', id: msg.id }));
-      };
+      delBtn.onclick = () => { socket.send(JSON.stringify({ type: 'delete', id: msg.id })); };
       actions.appendChild(delBtn);
 
       const editBtn = document.createElement('button');
       editBtn.textContent = 'Edit';
-      editBtn.className = 'edit-btn';
-      editBtn.dataset.msgId = msg.id;
+      editBtn.onclick = () => openEditUI(msg.id);
       actions.appendChild(editBtn);
     }
 
-    wrapper.appendChild(actions);
+    body.appendChild(actions);
+
+    // --- contextual menu (ellipsis button + menu on click / right-click) ---
+    // create ellipsis button (will be visible because of CSS)
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'msg-menu-btn';
+    menuBtn.textContent = '⋯';
+    menuBtn.title = 'Actions';
+
+    // helper to close existing menu
+    function closeContextMenu() {
+      const existing = document.querySelector('.context-menu');
+      if (existing) existing.remove();
+      document.removeEventListener('click', closeContextMenu);
+    }
+
+    // make the menu DOM and attach actions
+    function openContextMenuAt(x, y) {
+      closeContextMenu();
+      const menu = document.createElement('div');
+      menu.className = 'context-menu';
+
+      const addItem = (label, fn) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.onclick = (ev) => { ev.stopPropagation(); fn(); closeContextMenu(); };
+        menu.appendChild(b);
+      };
+
+      addItem(msg.pinned ? 'Unpin' : 'Pin', () => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: 'pin', id: msg.id, pin: !msg.pinned }));
+      });
+
+      addItem('Copy', () => {
+        try { navigator.clipboard.writeText(msg.content || ''); } catch(e){ console.warn('copy failed', e); }
+      });
+
+      addItem('Reply', () => startReply(msg.id) );
+
+      if (msg.author === myId) {
+        addItem('Edit', () => openEditUI(msg.id));
+        addItem('Delete', () => { if (!socket) return; socket.send(JSON.stringify({ type:'delete', id: msg.id })); });
+      }
+
+      // quick react row
+      const reactRow = document.createElement('div');
+      reactRow.style.display = 'flex';
+      reactRow.style.gap = '6px';
+      reactRow.style.marginTop = '6px';
+      ['👍','❤️','😂','🔥','😮'].forEach(ch => {
+        const rb = document.createElement('button');
+        rb.textContent = ch;
+        rb.onclick = (ev) => { ev.stopPropagation(); if (!socket) return; socket.send(JSON.stringify({ type:'react', id: msg.id, emoji: ch })); closeContextMenu(); };
+        reactRow.appendChild(rb);
+      });
+      menu.appendChild(reactRow);
+
+      document.body.appendChild(menu);
+
+      // clamp position so menu stays on-screen
+      const rect = menu.getBoundingClientRect();
+      let left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, x));
+      let top = Math.max(8, Math.min(window.innerHeight - rect.height - 8, y));
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+
+      setTimeout(()=> document.addEventListener('click', closeContextMenu));
+    }
+
+    // show menu on ellipsis click
+    menuBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const r = menuBtn.getBoundingClientRect();
+      openContextMenuAt(r.left, r.bottom + 6);
+    });
+
+    // show menu on right-click
+    wrapper.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      openContextMenuAt(ev.clientX, ev.clientY);
+    });
+
+    // attach the ellipsis button to wrapper (CSS shows it on hover)
+    wrapper.appendChild(menuBtn);
+
+
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(body);
     return wrapper;
   }
+
 
   // delegated handler for edit buttons (works even if messages are rendered later)
   document.getElementById('container').addEventListener('click', (ev) => {
@@ -444,51 +821,96 @@
 
   function startReply(messageId) {
     replyTo = messageId;
+
     const preview = document.getElementById('replyPreview');
     const msg = msgIndex[messageId];
-    preview.textContent = msg ? (msg.deleted ? '(deleted)' : msg.content) : '(loading...)';
-    document.getElementById('replyBox').style.display = 'block';
+
+    // set preview text (shortened)
+    let previewText = '';
+    if (msg) {
+      if (msg.deleted) previewText = '(original deleted)';
+      else previewText = (msg.content || '').toString().slice(0, 140);
+    } else {
+      previewText = '(loading...)';
+    }
+    if (preview) preview.textContent = previewText;
+
+    // show pinned reply box above composer
+    const rb = document.getElementById('replyBox');
+    if (rb) rb.style.display = 'flex';
+
+    // highlight the referenced message visually
+    highlightReferencedMsg(messageId);
   }
+
 
   //Gif Render
 
-  // Simple GIF picker — replace your gifBtn.onclick handler with this
   document.getElementById('gifBtn').onclick = async function openGifPicker() {
     const gifPicker = document.getElementById('gifPicker');
-    if (!gifPicker) return;
+    const gifBtn = document.getElementById('gifBtn');
+    if (!gifPicker || !gifBtn) return;
+
+    // toggle
     if (gifPicker.style.display === 'block') { gifPicker.style.display = 'none'; return; }
 
+    // build the picker content (same as before)
     gifPicker.innerHTML = `
-      <div style="padding:8px; display:flex; gap:8px; align-items:center;">
-        <button id="gifTrendingBtn">Trending</button>
-        <button id="gifSearchBtn">Search</button>
-        <button id="gifFavsBtn">Favorites</button>
-        <input id="gifSearchInput" placeholder="Search GIFs..." style="flex:1;" />
+      <div class="picker-header">
+        <button id="gifTrendingBtn" class="btn-small">Trending</button>
+        <button id="gifSearchBtn" class="btn-small">Search</button>
+        <button id="gifFavsBtn" class="btn-small">Favorites</button>
+        <input id="gifSearchInput" placeholder="Search GIFs..." style="flex:1; min-width:120px;" />
       </div>
-      <div id="gifGrid" style="padding:8px; display:flex; flex-wrap:wrap;"></div>
+      <div id="gifGrid"></div>
     `;
-    gifPicker.style.display = 'block';
+    
 
+    // position above the gifBtn, anchored to composer
+    // position above the gifBtn, anchored to the composer and fixed to viewport
+    gifPicker.style.position = 'fixed'; // important — keeps it visible and not extending page
+    gifPicker.style.display = 'block';
+    setTimeout(() => {
+      const btnRect = gifBtn.getBoundingClientRect();
+      const pickerRect = gifPicker.getBoundingClientRect();
+
+      // prefer above the button, centered horizontally over the button
+      let left = Math.round(btnRect.left + (btnRect.width / 2) - (pickerRect.width / 2));
+      // clamp to screen edges
+      left = Math.max(8, Math.min(window.innerWidth - pickerRect.width - 8, left));
+
+      // try to place above the composer/button; if not enough room, place above top area
+      let top = Math.round(btnRect.top - pickerRect.height - 10);
+      if (top < 8) {
+        // place it above composer area (safe fallback)
+        top = Math.max(8, btnRect.top - pickerRect.height - 10);
+      }
+
+      gifPicker.style.left = `${left}px`;
+      gifPicker.style.top = `${top}px`;
+      //gifPicker.style.left = `813.797px`
+      //gifPicker.style.top = `496px`
+    }, 40);
+
+
+    // wire the buttons (same behavior as your existing handlers)
     const grid = document.getElementById('gifGrid');
     const searchInp = document.getElementById('gifSearchInput');
-    const token = localStorage.getItem('access_token');
 
-    async function ensureFavs() {
-      await loadFavoriteMap();
-    }
+    async function ensureFavs(){ await loadFavoriteMap(); }
 
     document.getElementById('gifTrendingBtn').onclick = async () => {
       grid.innerHTML = 'Loading...';
-      await ensureFavs()
+      await ensureFavs();
       const res = await fetch('/gif/trending?limit=24');
       const j = await res.json();
       renderGifGrid(j.results || [], grid);
     };
 
     document.getElementById('gifSearchBtn').onclick = async () => {
-      const q = (seachInp && searchInp.value || '').trim();
+      const q = (searchInp && searchInp.value || '').trim();
       grid.innerHTML = 'Searching...';
-      await ensureFavs
+      await ensureFavs();
       const res = await fetch('/gif/search?q=' + encodeURIComponent(q || '') + '&limit=24');
       const j = await res.json();
       renderGifGrid(j.results || [], grid);
@@ -502,13 +924,11 @@
       const res = await fetch('/gif/favorites', { headers: { 'token': token }});
       if (!res.ok) { grid.innerHTML = 'Failed to load favorites'; return; }
       const j = await res.json();
-      // server favorites shape: {id, gif_id, url, preview, title, metadata}
-      // convert to the same minimal object shape as search/trending results
       const arr = (j.results || []).map(f => ({ id: f.gif_id, url: f.url, preview: f.preview, title: f.title }));
       renderGifGrid(arr, grid);
     };
 
-    // debounce search on enter / button
+    // debounce typing
     let t;
     searchInp.addEventListener('input', () => {
       clearTimeout(t);
@@ -517,6 +937,14 @@
 
     // initial load trending
     document.getElementById('gifTrendingBtn').click();
+
+    // hide if user clicks anywhere else
+    setTimeout(()=> window.addEventListener('click', function outside(e){
+      if (!gifPicker.contains(e.target) && e.target !== gifBtn) {
+        gifPicker.style.display = 'none';
+        window.removeEventListener('click', outside);
+      }
+    }));
   };
 
 
@@ -780,6 +1208,12 @@
     textarea.style.width = '100%';
     textarea.rows = 3;
     textarea.value = (msgIndex[messageId] && msgIndex[messageId].content) || '';
+    textarea.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        saveBtn.click();
+      }
+    });
 
     const saveBtn = document.createElement('button');
     saveBtn.textContent = 'Save';
@@ -845,9 +1279,13 @@
 
   document.getElementById('cancelReply').onclick = () => {
     replyTo = null;
-    document.getElementById('replyBox').style.display = 'none';
-    document.getElementById('replyPreview').textContent = '';
+    const rb = document.getElementById('replyBox');
+    if (rb) rb.style.display = 'none';
+    const preview = document.getElementById('replyPreview');
+    if (preview) preview.textContent = '';
+    clearReferencedHighlight();
   };
+
 
   // REGISTER: send JSON, store token/username, hide auth UI and auto-connect
   document.getElementById('authRegister').onclick = async () => {
@@ -933,6 +1371,8 @@ function resetChatUI(){
 
   // Clear input
   const input = document.getElementById('inputText');
+
+
   if (input) input.value = '';
 
   // Hide reply box
@@ -963,6 +1403,15 @@ async function connectSocket() {
   socket = new WebSocket(wsUrl);
 
   socket.addEventListener('open', () => {
+    // Set header username + avatar
+    const headerUserEl = document.getElementById('headerUsername');
+    const headerAvatarEl = document.getElementById('headerAvatar');
+    if (headerUserEl) headerUserEl.textContent = myId || '';
+    if (headerAvatarEl) headerAvatarEl.textContent = (myId && myId[0]) ? myId[0].toUpperCase() : '?';
+    document.getElementById('appHeader').style.display = 'flex';
+    document.getElementById('headerAvatar').style.display = 'flex';
+
+
     document.getElementById('status').textContent = 'Connected as ' + myId;
 
     // load favorite gifs
@@ -980,7 +1429,7 @@ async function connectSocket() {
     document.getElementById('authBox').style.display = 'none';
 
     // Show logout
-    document.getElementById('logoutBtn').style.display = 'inline-block';
+    document.getElementById('logoutBtn').style.display = 'none';
 
     // Disable connect
     document.getElementById('connectBtn').disabled = true;
@@ -1025,11 +1474,14 @@ async function connectSocket() {
       const container = document.getElementById('container');
       container.innerHTML = ''; // clear
       msgs.forEach(m => {
+        if (m.deleted) return; // skip deleted messages entirely
         const node = renderMessage(m);
         showMessageElement(node);
+        ensureEndSpacer(container);
       });
       return;
     }
+
 
     if (payload.type === 'message') {
       const node = renderMessage(payload);
@@ -1040,14 +1492,8 @@ async function connectSocket() {
     if (payload.type === 'delete') {
       const id = payload.id;
       const el = document.getElementById('msg-' + id);
-      if (el) {
-        const content = el.querySelector('.content');
-        if (content) {
-          content.textContent = '(message deleted)';
-          content.classList.add('deleted');
-        }
-      }
-      if (msgIndex[id]) msgIndex[id].deleted = true;
+      if (el) el.remove();          // remove from DOM so text shifts up
+      if (msgIndex[id]) delete msgIndex[id];  // remove from index
       return;
     }
 
@@ -1118,10 +1564,27 @@ async function connectSocket() {
   });
 }
 
-// minimal connect button behavior now calls connectSocket()
-document.getElementById('connectBtn').onclick = () => {
-  connectSocket();
-};
+
+  // send on Enter (Shift+Enter for newline) — attach once on initial load
+  (function attachEnterSend() {
+    const inputEl = document.getElementById('inputText');
+    
+    if (!inputEl) return;
+    inputEl.addEventListener('keydown', (e) => {
+      // Enter without Shift -> send
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.getElementById('submitButton').click();
+      }
+    });
+  })();
+
+
+
+  // minimal connect button behavior now calls connectSocket()
+  document.getElementById('connectBtn').onclick = () => {
+    connectSocket();
+  };
 
 
   document.getElementById('submitButton').onclick = () => {
@@ -1139,12 +1602,19 @@ document.getElementById('connectBtn').onclick = () => {
     //const payload = { type: 'message', content: text, reply_to: replyTo || null };
     //socket.send(JSON.stringify(payload));
     input.value = '';
+    
+    setTimeout(()=> {
+      const container= document.getElementById('container');
+      const wrapper = container ? (container.closest('.chat-wrapper') || document.querySelector('.chat-wrapper')) : null;
+      if (wrapper) wrapper.scrollTop = wrapper.scrollHeight;
+    }, 50);
+
     // reset reply UI
     replyTo = null;
     document.getElementById('replyBox').style.display = 'none';
     document.getElementById('replyPreview').textContent = '';
 
-    
+
   };
 
   document.getElementById('viewPinsBtn').onclick = () => {

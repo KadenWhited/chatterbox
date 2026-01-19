@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from fastapi import Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
+
+#Security/Webhosting
 #----------------------------------------------------------------------------------------------
 
 
@@ -154,7 +156,7 @@ def query_giphy_search(q: str, limit: int = 20, offset: int = 0):
     if cache_key in gif_search_cache:
         return gif_search_cache[cache_key]
     url = "https://api.giphy.com/v1/gifs/search"
-    params = {"api_key": GIPHY_KEY, "q": q, "limit": limit, "offset": offset, "rating":"pg-13", "lang":"en"}
+    params = {"api_key": GIPHY_KEY, "q": q, "limit": limit, "offset": offset, "rating":"r", "lang":"en"}
     r = requests.get(url, params=params, timeout=5)
     result = r.json() if r.status_code == 200 else {"data": []}
     gif_search_cache[cache_key] = result
