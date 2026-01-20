@@ -20,7 +20,7 @@ from auth_utils import hash_password, verify_password, create_access_token, deco
 from starlette.status import HTTP_401_UNAUTHORIZED
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, DataError
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 
 #Security/Webhosting
@@ -56,8 +56,8 @@ def get_db():
     finally:
         db.close()
 
-
-EMOJI_FILE = pathlib.Path("static/emojis.json")
+HERE = pathlib.Path(__file__).resolve().parent
+EMOJI_FILE = HERE / "static" / "emojis.json"
 EMOJI_LIST = []
 EMOJI_ALIASES = {}
 
@@ -69,11 +69,13 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 def load_emojis():
     global EMOJI_LIST, EMOJI_ALIASES
     if not EMOJI_FILE.exists():
-        print("[emoji] static/emojis.json not found - EMOJI_LIST empty")
+        print("[emoji] static/emojis.json not found - EMOJI_LIST empty (looked at)", EMOJI_FILE)
         EMOJI_LIST = []
         EMOJI_ALIASES = {}
         return
-    data = json.loads(EMOJI_FILE.read_text(encoding="UTF-8"))
+    text = EMOJI_FILE.read_text(encoding="UTF-8")
+    print("[emoji] loading from", EMOJI_FILE, "size", len(text))
+    data = json.loads(text)
     EMOJI_LIST = [item.get("char") for item in data if item.get("char")]
 
     aliases = {}
@@ -244,6 +246,14 @@ async def add_security_headers(request, call_next):
     resp.headers["Referrer-Policy"] = "no-referrer-when-downgrade"
     return resp
 
+@app.post("/admin/emojis/reload")
+def reload_emojis(background: BackgroundTasks):
+    try:
+        load_emojis()
+        return {"ok": True, "loaded": len(EMOJI_LIST)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db=Depends(get_db)):
     try:
@@ -405,7 +415,7 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             else:
                 safe_gid = orig_gid
 
-            existing = db.query(Favorite).filter(Favorite.user_id==uid, Favorite.gif_id==gif_id).first()
+            existing = db.query(Favorite).filter(Favorite.user_id==uid, Favorite.gif_id==safe_gid).first()
             if existing:
                 return {"ok": True, "id": existing.id}
             
@@ -430,7 +440,7 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             db.rollback()
             safe_gid = hashlib.sha256((str(gif_id) or "").encode("utf-8")).hexdigest()
             fav = Favorite(
-                user=uid,
+                user_id=uid,
                 gif_id=safe_gid,
                 url=(url or "")[:2048] or None,
                 preview=(preview or "")[:1024] or None,
@@ -482,7 +492,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # --- auth / user lookup ---
     token = websocket.query_params.get("token")
-    print("[ws] token present:", bool(token), "token_snippet:", (token or ""[:40]))
+    print("[ws] token present:", bool(token))
 
     if not token:
         print("[ws] closing websocket: no token provided")

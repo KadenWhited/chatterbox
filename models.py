@@ -29,7 +29,7 @@ class Message(Base):
     pinned = Column(Boolean, default=False)
     pinned_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     pinned_at = Column(DateTime(timezone=True), nullable=True)
-    reactions = Column(JSON, default={}) #emoji -> list of user ids
+    reactions = Column(JSON, default=dict)
 
 
 class Favorite(Base):
@@ -40,5 +40,5 @@ class Favorite(Base):
     url = Column(String(512), nullable=False)           # original gif url
     preview = Column(String(512), nullable=True)        # small thumb
     title = Column(String(256), nullable=True)
-    metadata_json = Column(JSON, default={})
+    metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime(timezone=True), default=now_utc)

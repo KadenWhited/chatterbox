@@ -359,26 +359,27 @@
     });
   } 
 
-  // load emoji definitions from server static file
-  fetch('/static/emojis.json')
-  .then(res => {
-    if (!res.ok) throw new Error('Failed to fetch emojis.json: ' + res.status);
-    return res.json();
-  })
-  .then(data => {
-    EMOJI_LIST = data.map(item => item.char).filter(Boolean);
-    EMOJI_ALIASES = {};
-    data.forEach(item => {
-      const ch = item.char;
-      (item.aliases || []).forEach(a => {
-        EMOJI_ALIASES[a.toLowerCase()] = ch;
+ // cache-busting + diagnostics
+  fetch('/static/emojis.json?ts=' + Date.now(), {cache: 'no-store'})
+    .then(async res => {
+      console.log('[emoji] fetch status', res.status, res.headers.get('cache-control'));
+      if (!res.ok) throw new Error('Failed to fetch emojis.json: ' + res.status);
+      const data = await res.json();
+      console.log('[emoji] raw data length', Array.isArray(data) ? data.length : 'not-array', data.slice ? data.slice(0,5) : null);
+      EMOJI_LIST = data.map(item => item.char).filter(Boolean);
+      EMOJI_ALIASES = {};
+      data.forEach(item => {
+        const ch = item.char;
+        (item.aliases || []).forEach(a => {
+          EMOJI_ALIASES[a.toLowerCase()] = ch;
+        });
       });
+      console.log('[emoji] processed', EMOJI_LIST.length, 'chars,', Object.keys(EMOJI_ALIASES).length, 'aliases');
+    })
+    .catch(err => {
+      console.warn('Could not load emojis.json:', err);
     });
-    console.log('[emoji] loaded', EMOJI_LIST.length, 'items');
-  })
-  .catch(err => {
-    console.warn('Could not load emojis.json:', err);
-  });
+
 
   let favoriteMap = {}; // gif_provider_id -> favorite_row_id
 
