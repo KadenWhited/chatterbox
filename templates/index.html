@@ -1388,12 +1388,8 @@ async function connectSocket() {
     return;
   }
 
+  const token = localStorage.getItme('access_token')
   const storedUsername = localStorage.getItem('username');
-
-  if (!token || !myId) {
-    document.getElementById('status').textContent = 'Not logged in';
-    return;
-  }
 
   // create WS and install handlers
   if (!token || !myId) {
