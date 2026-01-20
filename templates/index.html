@@ -1388,9 +1388,7 @@ async function connectSocket() {
     return;
   }
 
-  const token = localStorage.getItem('access_token');
   const storedUsername = localStorage.getItem('username');
-  myId = storedUsername || null;
 
   if (!token || !myId) {
     document.getElementById('status').textContent = 'Not logged in';
@@ -1398,7 +1396,18 @@ async function connectSocket() {
   }
 
   // create WS and install handlers
-  const wsUrl = `ws://127.0.0.1:8000/ws?token=${encodeURIComponent(token)}`;
+  if (!token || !myId) {
+    document.getElementById('status').textContent = 'Not logged in';
+    return;
+  }
+
+  // build ws url relative to current page so it works on Render / localhost / prod
+  const isSecure = (window.location.protocol === 'https:');
+  const wsProto = isSecure ? 'wss' : 'ws';
+  const host = window.location.host; // includes port if any
+  const wsUrl = `${wsProto}://${host}/ws?token=${encodeURIComponent(token)}`;
+
+  console.log('[connectSocket] opening', wsUrl);
   document.getElementById('status').textContent = 'Connecting...';
   socket = new WebSocket(wsUrl);
 
