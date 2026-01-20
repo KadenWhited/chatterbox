@@ -111,7 +111,11 @@ class ConnectionManager:
         print(f"[disconnect] {meta}")
 
     async def send_personal_message(self, payload: Dict[str, Any], websocket: WebSocket):
-        await websocket.send_text(json.dumps(payload))
+        try:
+            await websocket.send_text(json.dumps(payload))
+        except Exception as e:
+            print("[send_personal_message] failed to send to", self.active_connections.get(websocket), "error:", repr(e))
+            raise
 
     async def broadcast(self, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
@@ -122,7 +126,7 @@ class ConnectionManager:
             try:
                 await conn.send_text(text)
             except Exception as e:
-                print(f"[broadcast] removing broken socket: {e}")
+                print(f"[broadcast] removing broken socket {self.active_connections.get(conn)}: {e}")
                 self.disconnect(conn)
 
     def store_message(self, msg: Dict[str, Any]):
@@ -430,14 +434,31 @@ def read_index(request: Request):
 # username = string to track names
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+
+    try:
+        peer = websocket.client
+    except Exception:
+        peer = None
+    print("[ws] incoming connection from peer:", peer)
+
     # --- auth / user lookup ---
     token = websocket.query_params.get("token")
+    print("[ws] token present:", bool(token), "token_snippet:", (token or ""[:40]))
+
     if not token:
+        print("[ws] closing websocket: no token provided")
         await websocket.close(code=1008)  # policy violation / auth required
         return
 
-    user_id = decode_access_token(token)
+    user_id = None
+    try:
+        user_id = decode_access_token(token)
+    except Exception as e:
+        print("[ws] decode_access_token raised:", repr(e))
+    print("[ws] decode_access_token ->", user_id)
+
     if not user_id:
+        print("[ws] closing websockey: token invalid/expired")
         await websocket.close(code=1008)
         return
 
@@ -452,13 +473,28 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             db.close()
 
-    user_info = await run_in_threadpool(get_user_by_id, user_id)
+    user_info = None
+    try:
+        user_info = await run_in_threadpool(get_user_by_id, user_id)
+    except Exception as e:
+        print("[ws] get_user_by_id error:", repr(e))
+    print("[ws] get_user_by_id ->", user_info)
+
     if not user_info:
+        print("[ws] closing websocket: user not found for id", user_id)
         await websocket.close(code=1008)
         return
 
     client_meta = {"user_id": user_info["id"], "username": user_info["username"]}
-    await connectionmanager.connect(websocket, client_meta)
+    try:
+        await connectionmanager.connect(websocket, client_meta)
+    except Exception as e:
+        print("[ws] connectionmanager.connect failed:", repr(e))
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
 
     # --- load history (threadpool DB access) ---
     def load_history(limit=200):
@@ -492,7 +528,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # avoid duplicate
         if not connectionmanager.find_message(m["id"]):
             connectionmanager.store_message(m)
-
+    print(f"[ws] sending history ({len(history)} messages) to {client_meta['username']}")
     await connectionmanager.send_personal_message({"type": "history", "messages": history}, websocket)
 
     try:

@@ -1395,6 +1395,8 @@ async function connectSocket() {
   const storedUsername = localStorage.getItem('username');
 
   myId = storedUsername || myId;
+  console.log('[connectSocket] token?', !!token, 'myId:', myId);
+  console.log('[connectSocket] page protocol:', window.location.protocol, 'host:', window.location.host);
 
   // create WS and install handlers
   if (!token || !myId) {
@@ -1446,13 +1448,15 @@ async function connectSocket() {
     document.getElementById('connectBtn').disabled = true;
   });
 
-  socket.addEventListener('close', (ev) => {
-    document.getElementById('status').textContent = 'Disconnected';
-    console.log('WS closed', ev);
+  socket.addEventListener('error', (ev) => {
+    console.error('[WS] error', ev);
+    document.getElementById('status').textContent = 'WS error (see console)';
   });
 
-  socket.addEventListener('error', (ev) => {
-    console.error('WS error', ev);
+  socket.addEventListener('close', (ev) => {
+    console.log('[WS] closed code=', ev.code, 'reason=', ev.reason, 'wasClean=', ev.wasClean);
+    document.getElementById('status').textContent = `Disconnected (code ${ev.code})`;
+    if (ev.code === 1008) alert('Connection closed due to auth/policy (1008). Token may be invalid / expired.');
   });
 
   // on page load, try auto-login if token + username exist
