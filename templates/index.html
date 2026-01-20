@@ -1388,7 +1388,7 @@ async function connectSocket() {
     return;
   }
 
-  const token = localStorage.getItme('access_token')
+  const token = localStorage.getItem('access_token')
   const storedUsername = localStorage.getItem('username');
 
   // create WS and install handlers
