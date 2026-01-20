@@ -10,18 +10,31 @@ ALGO = "HS256"
 ACCESS_EXPIRE_MINUTES = 60*24*7
 
 def hash_password(password: str) -> str:
+    if password is None:
+        raise ValueError("password required")
+    if isinstance(password, bytes):
+        password = password.decode("utf-8", "ignore")
+    if len(password) < 8:
+        raise ValueError("password too short")
+    if len(password) > 4096:
+        raise ValueError("password too long")
     return pwd_ctx.hash(password)
 
-def verify_password(plain, hashed):
-    return pwd_ctx.verify(plain, hashed)
+def verify_password(password: str, hashval: str) -> bool:
+    try:
+        return pwd_ctx.verify(password, hashval)
+    except Exception:
+        return False
 
-def create_access_token(sub: str, expires_minutes: int = ACCESS_EXPIRE_MINUTES):
-    to_encode = {"sub": str(sub), "exp": (datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)).timestamp()}
-    return jwt.encode(to_encode, SECRET, algorithm=ALGO)
+def create_access_token(user_id: int, minutes: int = JWT_EXPIRES_MINUTES):
+    exp = datetime.utcnow() + timedelta(minutes=minutes)
+    payload = {"sub": str(user_id), "exp": exp.isoformat()}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
 def decode_access_token(token: str):
     try:
-        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
-        return payload.get("sub")
-    except JWTError:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        sub = payload.get("sub")
+        return int(sub) if sub is not None else None
+    except Exception:
         return None
