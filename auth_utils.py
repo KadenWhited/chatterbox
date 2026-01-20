@@ -3,7 +3,8 @@ from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 import os
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_ctx = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
+
 SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 ALGO = "HS256"
 ACCESS_EXPIRE_MINUTES = 60*24*7
