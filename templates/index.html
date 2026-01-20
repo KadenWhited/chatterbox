@@ -1339,6 +1339,9 @@
       if (res.ok && j.access_token) {
         localStorage.setItem('access_token', j.access_token);
         localStorage.setItem('username', j.username);
+
+        myId = j.username;
+
         document.getElementById('authStatus').textContent = `Logged in as ${j.username}`;
 
         // hide auth UI
@@ -1391,9 +1394,12 @@ async function connectSocket() {
   const token = localStorage.getItem('access_token')
   const storedUsername = localStorage.getItem('username');
 
+  myId = storedUsername || myId;
+
   // create WS and install handlers
   if (!token || !myId) {
     document.getElementById('status').textContent = 'Not logged in';
+    console.warn('[connectSocket] missing token or username', { token: !!token, myId })
     return;
   }
 
@@ -1449,17 +1455,19 @@ async function connectSocket() {
     console.error('WS error', ev);
   });
 
+  // on page load, try auto-login if token + username exist
   window.addEventListener('DOMContentLoaded', () => {
-  const token = localStorage.getItem('access_token');
-  const user = localStorage.getItem('username');
+    const token = localStorage.getItem('access_token');
+    const user = localStorage.getItem('username');
 
-  if (token && user) {
-    connectSocket(); // will show chatUI
-  } else {
-    document.getElementById('chatUI').style.display = 'none';
-    document.getElementById('authBox').style.display = 'block';
-  }
-});
+    if (token && user) {
+      myId = user;            // <- ensure myId is set for connectSocket
+      connectSocket();        // will show chatUI on successful WS open
+    } else {
+      document.getElementById('chatUI').style.display = 'none';
+      document.getElementById('authBox').style.display = 'block';
+    }
+  });
 
 
   socket.addEventListener('message', (ev) => {
