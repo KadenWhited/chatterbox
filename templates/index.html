@@ -976,7 +976,7 @@
             const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
             if (res.ok) { delete favoriteMap[idKey]; favBtn.textContent = '♡'; updateGifFavUI(idKey); }
           } else {
-            const payload = { gif_id: g.id || idKey, url: url, preview: g.preview, title: g.title || '' };
+            const payload = { gif_id: g.id || Sting(g.url), url: g.url, preview: g.preview, title: g.title || '' };
             const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
             if (res.ok) {
               const j = await res.json().catch(()=>({}));

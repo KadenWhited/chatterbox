@@ -19,7 +19,7 @@ from models import User, Message, Favorite
 from auth_utils import hash_password, verify_password, create_access_token, decode_access_token
 from starlette.status import HTTP_401_UNAUTHORIZED
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, DataError
 from fastapi import Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
@@ -27,6 +27,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi import Response
+import hashlib
 #----------------------------------------------------------------------------------------------
 
 
@@ -394,17 +395,55 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
     def _add(uid, gif_id, url, preview, title, metadata):
         db = SessionLocal()
         try:
-            # avoid duplicates
+            orig_gid = "" if gif_id is None else str(gif_id)
+            if len(orig_gid) >128:
+                safe_gid = hashlib.sha256(orig_gid.encode("utf-8")).hexdigest()
+                metadata = metadata or {}
+
+                if "original_gif_id" not in metadata:
+                    metadata["original_gif_id"] = orig_gid
+            else:
+                safe_gid = orig_gid
+
             existing = db.query(Favorite).filter(Favorite.user_id==uid, Favorite.gif_id==gif_id).first()
             if existing:
                 return {"ok": True, "id": existing.id}
-            fav = Favorite(user_id=uid, gif_id=str(gif_id), url=url, preview=preview, title=title, metadata_json=metadata or {})
+            
+            safe_url = (url or "")[:2048]
+            safe_preview = (preview or "")[:1024]
+            safe_title = (title or "")[:256]
+
+            fav = Favorite(
+                user_id=uid, 
+                gif_id=str(safe_gid),
+                url=safe_url,
+                preview=safe_preview, 
+                title=safe_title, 
+                metadata_json=metadata or {}
+            )
+            db.add(fav)
+            db.commit()
+            db.refresh(fav)
+            return {"ok": True, "id": fav.id}
+
+        except DataError:
+            db.rollback()
+            safe_gid = hashlib.sha256((str(gif_id) or "").encode("utf-8")).hexdigest()
+            fav = Favorite(
+                user=uid,
+                gif_id=safe_gid,
+                url=(url or "")[:2048] or None,
+                preview=(preview or "")[:1024] or None,
+                title=(title or "")[:256] or "",
+                metadata_json=(metadata or {"original_gif_id": str(gif_id)})
+            )
             db.add(fav)
             db.commit()
             db.refresh(fav)
             return {"ok": True, "id": fav.id}
         finally:
             db.close()
+            
 
     res = await run_in_threadpool(_add, current_user["id"], gif_id, url, payload.get("preview"), payload.get("title"), payload.get("metadata"))
     return res
