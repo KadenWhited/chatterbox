@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect, UploadFile, File, Header
@@ -49,6 +49,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["https://chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
+
 def get_db():
     db = SessionLocal()
     try:
@@ -62,8 +64,8 @@ EMOJI_LIST = []
 EMOJI_ALIASES = {}
 
 MAX_PINNED = 100
-
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
 def load_emojis():
@@ -139,6 +141,19 @@ class ConnectionManager:
 
         for conn in dead:
             self.disconnect(conn)
+
+    async def broadcast_presence_snapshot(self):
+        await self.broadcast({
+            "type": "presence_snapshot",
+            "online": self.usernames_online()
+        })
+
+    async def broadcast_presence_change(self, username: str, status: str):
+        await self.broadcast({
+            "type": "presence",
+            "user": username,
+            "status": status # "online" or "offline"
+        })
 
     def store_message(self, msg: Dict[str, Any]):
         self.messages.append(msg)
@@ -268,6 +283,20 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
 
+class ProfileOut(BaseModel):
+    id: int
+    username: str
+    display_name: Optional[str] = None
+    status: Optional[str] = None
+    bio: Optional[str] = None
+    avatar: Optional[str] = None
+
+class ProfileUpdate(BaseModel):
+    display_name: Optional[str] = None
+    status: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_color: Optional[str] = None
+
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     resp: Response = await call_next(request)
@@ -334,8 +363,13 @@ def login(payload: RegisterRequest, db=Depends(get_db)):
     token = create_access_token(user.id)
     return {"access_token": token, "username": user.username, "user_id": user.id}
 
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    if file.content_type not in ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(status_code=415, detail="Unsupported file type")
+    
     filename = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}"
     dest = UPLOAD_DIR / filename
     total = 0
@@ -369,6 +403,65 @@ def link_preview(url: str):
         "image": meta("og:image"),
         "url": url
     }
+
+@app.get("/me", response_model=ProfileOut)
+async def get_me(current_user=Depends(get_current_user)):
+    def _get(uid: int):
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == uid).first()
+            if not u:
+                raise HTTPException(status_code=404, detail="not_found")
+            return {
+                "id": u.id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "status": u.status,
+                "bio": u.bio,
+                "avatar_color": u.avatar_color,
+                "avatar": u.avatar,
+            }
+        finally:
+            db.close()
+    return await run_in_threadpool(_get, current_user["id"])
+
+@app.patch("/me", response_model=ProfileOut)
+async def update_me(payload: ProfileUpdate, current_user=Depends(get_current_user)):
+    def _upd(uid: int, p: ProfileUpdate):
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.id == uid).first()
+            if not u:
+                raise HTTPException(status_code=404, detail="not_found")
+            
+            if p.display_name is not None:
+                u.display_name = p.display_name.strip()[:120] or None
+            if p.status is not None:
+                u.status = p.status.strip()[:32] or None
+            if p.bio is not None:
+                u.bio = p.bio.strip()[:200] or None
+            if p.avatar_color is not None:
+                c = p.avatar_color.strip()
+                if c and not c.startswith("#"):
+                    c = "#" + c
+                u.avatar_color = c[:16] if c else None
+
+            db.commit()
+            db.refresh(u)
+            return {
+                "id": u.id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "status": u.status,
+                "bio": u.bio,
+                "avatar_color": u.avatar_color,
+                "avatar": u.avatar,
+            }
+        finally:
+            db.close()
+
+    return await run_in_threadpool(_upd, current_user["id"], payload)
+
 
 @app.get("/gif/search")
 def gif_search(q: str, limit: int = 20, offset: int = 0):
@@ -571,6 +664,9 @@ async def websocket_endpoint(websocket: WebSocket):
     client_meta = {"user_id": user_info["id"], "username": user_info["username"]}
     try:
         await connectionmanager.connect(websocket, client_meta)
+        await connectionmanager.broadcast_presence_snapshot()
+        await connectionmanager.broadcast_presence_change(client_meta["username"], "online")
+
     except Exception as e:
         print("[ws] connectionmanager.connect failed:", repr(e))
         try:
@@ -605,7 +701,28 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             db.close()
 
+    def load_user_directory(usernames):
+        db = SessionLocal()
+        try:
+            rows = db.query(User).filter(User.username.in_(list(usernames))).all()
+            d = {}
+            for u in rows:
+                d[u.username] = {
+                    "display_name": u.display_name,
+                    "avatar_color": u.avatar_color,
+                    "status": u.status
+                }
+            return d
+        finally:
+            db.close()
+
     history = await run_in_threadpool(load_history, 200)
+
+    usernames = {m["author"] for m in history if m.get("author")}
+    user_dir = await run_in_threadpool(load_user_directory, usernames)
+    await connectionmanager.send_personal_message({"type": "user_directory", "users": user_dir}, websocket)
+
+
     # ensure connectionmanager has the loaded history in memory (avoid later not_found)
     for m in history:
         # avoid duplicate
@@ -885,4 +1002,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         connectionmanager.disconnect(websocket)
+        await connectionmanager.broadcast_presence_snapshot()
+        await connectionmanager.broadcast_presence_change(client_meta["username"], "offline")
         await connectionmanager.broadcast({"type":"notice","text": f"User {client_meta['username']} left the chat"})

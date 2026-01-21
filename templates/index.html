@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  
+
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
@@ -61,6 +61,10 @@
       padding: 12px;
       overflow: auto;
     }
+
+    .presenceLine { color:var(--muted); font-size:12px;}
+    .typingLine { color:var(--muted); font-size:12px;}
+
     .status-line { font-size:13px; color:var(--muted); margin-bottom:6px; }
 
     .messages { display:flex; flex-direction:column; gap:8px; }
@@ -294,19 +298,35 @@
       </div>
       <div class="header-right">
         <button id="viewPinsBtn" class="btn-small">Pins</button>
+        <button id="settingsBtn" class="btn-small">Settings</button>
         <button id="connectBtn" class="btn-small">Connect</button>
         <button id="logoutBtn" class="btn-small">Logout</button>
       </div>
+      <div id="settingsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
+        <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700;">Profile</div>
+            <button id="closeSettings" class="btn-small">Close</button>
+          </div>
+
+          <div style="margin-top:10px; display:grid; gap:8px;">
+            <input id="setDisplayName" placeholder="Display name" />
+            <input id="setStatus" placeholder="Status (e.g. chilling)" maxlength="32" />
+            <input id="setAvatarColor" placeholder="Avatar color (e.g. #4f9fff)" />
+            <textarea id="setBio" placeholder="Bio" rows="3"></textarea>
+            <button id="saveSettings" class="btn-primary">Save</button>
+            <div id="settingsMsg" style="color:var(--muted); font-size:12px;"></div>
+          </div>
+        </div>
+      </div>
+
     </header>
-
-    
-  <div id="presenceLine" style="color:var(--muted); font-size:12px;"></div>
-  <div id="typingLine" style="color:var(--muted); font-size:12px;"></div>
-
 
     <!-- Main chat area -->
     <main class="chat-wrapper">
       <div id="status" class="status-line"></div>
+      <div id="presenceLine" class="presenceLine"></div>
+      <div id="typingLine" class="typingLine"></div>
       <div id="container" class="messages"></div>
     </main>
 
@@ -347,14 +367,22 @@
 
 
 <script>
+
   let socket = null;
   let myId = null;
   let replyTo = null;
   const msgIndex = {}; //id
 
-  // global saves
   let EMOJI_LIST = [];
   let EMOJI_ALIASES = {};
+
+  const userDirectory = {}; //username -> profile
+  
+  let unreadCount = 0;
+  let windowFocused = true;
+
+  window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chat'});
+  window.addEventListener('blur', () => { windowFocused = false; });
 
   async function loadFavoriteMap() {
     favoriteMap = {};
@@ -1154,7 +1182,7 @@
             const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
             if (res.ok) { delete favoriteMap[idKey]; favBtn.textContent = '♡'; updateGifFavUI(idKey); }
           } else {
-            const payload = { gif_id: g.id || String(g.url), url: g.url, preview: g.preview, title: g.title || '' };
+            const payload = { gif_id:g.url, url: g.url, preview: g.preview, title: g.title || '', metadata: { provider_id: g.id} };
             const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
             if (res.ok) {
               const j = await res.json().catch(()=>({}));
@@ -1193,7 +1221,7 @@
 
     results.forEach(g => {
       const url = g.url;
-      const gifKey = getGifKeyFromResult(g);
+      const gifKey = String(g.url || '');
 
       const wrapper = document.createElement('div');
       wrapper.style.position = 'relative';
@@ -1246,11 +1274,11 @@
         } else {
           // add favorite
           const payload = {
-            gif_id: g.id || gifKey,
+            gif_id: g.url,
             url: g.url,
             preview: g.preview,
             title: g.title,
-            metadata: g.metadata || {}
+            metadata: { provider_id: g.id }
           };
           const res = await fetch('/gif/favorite', {
             method: 'POST',
@@ -1378,9 +1406,10 @@
   function replaceAliasesInText(text) {
     return text.replace(/:([a-zA-Z0-9_+-]+):/g, (m, alias) => {
       const ch = EMOJI_ALIASES[alias.toLowerCase()];
-    return ch || m;
-  });
-}
+      return ch || m;
+    });
+  }
+
 
   function isImageUrl(url){
     return /\.(png|jpe?g|gif|webp)$/i.test(url);
@@ -1532,6 +1561,9 @@ async function connectSocket() {
   socket = new WebSocket(wsUrl);
 
   socket.addEventListener('open', () => {
+
+    ensureNotificationPermission();
+
     // Set header username + avatar
     const headerUserEl = document.getElementById('headerUsername');
     const headerAvatarEl = document.getElementById('headerAvatar');
@@ -1562,7 +1594,7 @@ async function connectSocket() {
     document.getElementById('authBox').style.display = 'none';
 
     // Show logout
-    document.getElementById('logoutBtn').style.display = 'none';
+    document.getElementById('logoutBtn').style.display = 'inline-block';
 
     // Disable connect
     document.getElementById('connectBtn').disabled = true;
@@ -1628,6 +1660,18 @@ async function connectSocket() {
 
 
     if (payload.type === 'message') {
+
+      if (!windowFocused) {
+        unreadCount++;
+        document.title = `(${unreadCount}) Chat`;
+      }
+
+      if (!windowFocused && 'Notification' in window && Notification.permission === 'granted') {
+        const profile = userDirectory[payload.author] || {};
+        const name = profile.display_name || payload.author;
+        new Notification(name, { body: (payload.content || '').toString().slice(0, 120) });
+      }
+
       const node = renderMessage(payload);
       showMessageElement(node);
       return;
@@ -1707,9 +1751,41 @@ async function connectSocket() {
       n.textContent = payload.text;
       showMessageElement(n);
     }
+
+    if (payload.type === "user_directory") {
+      Object.assign(userDirectory, payload.users || {});
+      renderPresence(); // optional
+      return;
+    }
+
   });
 }
 
+  async function fetchMe() {
+    const token = localStorage.getItem('access_token');
+    const res = await fetch('/me', { headers: { token } });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  async function saveMe(patch) {
+    const token = localStorage.getItem('access_token');
+    const res = await fetch('/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', token },
+      body: JSON.stringify(patch)
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(j.detail || 'save failed');
+    return j;
+  }
+
+  async function ensureNotificationPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch(e){}
+    }
+  }
 
   // send on Enter (Shift+Enter for newline) — attach once on initial load
   (function attachEnterSend() {
@@ -1753,6 +1829,48 @@ async function connectSocket() {
     connectSocket();
   };
 
+  document.getElementById('settingsBtn').onclick = async () => {
+    const me = await fetchMe();
+    if (!me) return alert('Failed to load profile');
+    document.getElementById('setDisplayName').value = me.display_name || '';
+    document.getElementById('setStatus').value = me.status || '';
+    document.getElementById('setAvatarColor').value = me.avatar_color || '';
+    document.getElementById('setBio').value = me.bio || '';
+    document.getElementById('settingsModal').style.display = 'block';
+  };
+
+  document.getElementById('closeSettings').onclick = () => {
+  document.getElementById('settingsModal').style.display = 'none';
+  };
+
+  document.getElementById('saveSettings').onclick = async () => {
+    const patch = {
+      display_name: document.getElementById('setDisplayName').value,
+      status: document.getElementById('setStatus').value,
+      avatar_color: document.getElementById('setAvatarColor').value,
+      bio: document.getElementById('setBio').value
+    };
+    try {
+      const me = await saveMe(patch);
+      // update local cache so UI reflects immediately
+      userDirectory[me.username] = {
+        display_name: me.display_name,
+        status: me.status,
+        avatar_color: me.avatar_color
+      };
+      document.getElementById('settingsMsg').textContent = 'Saved.';
+      // refresh header avatar/name instantly
+      const headerUserEl = document.getElementById('headerUsername');
+      if (headerUserEl) headerUserEl.textContent = (me.display_name || me.username);
+      const headerAvatarEl = document.getElementById('headerAvatar');
+      if (headerAvatarEl) {
+        headerAvatarEl.textContent = (me.display_name || me.username)[0].toUpperCase();
+        if (me.avatar_color) headerAvatarEl.style.background = me.avatar_color;
+      }
+    } catch (e) {
+      document.getElementById('settingsMsg').textContent = String(e.message || e);
+    }
+  };
 
   document.getElementById('submitButton').onclick = () => {
     const input = document.getElementById('inputText');
@@ -1766,8 +1884,6 @@ async function connectSocket() {
     const contentToSend = replaceAliasesInText(raw);
     socket.send(JSON.stringify({ type: 'message', content: contentToSend, reply_to: replyTo || null }));
 
-    //const payload = { type: 'message', content: text, reply_to: replyTo || null };
-    //socket.send(JSON.stringify(payload));
     input.value = '';
     
     setTimeout(()=> {
