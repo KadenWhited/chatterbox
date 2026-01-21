@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>ChatterBox</title>
     <style>
     :root{
       --bg:#0f1115;
@@ -14,6 +16,7 @@
       --text:#f6f7f9;
       --subtle:#2a2d31;
       --composer-height:84px;
+      --header-height:52px;
     }
 
     html,body {
@@ -50,11 +53,13 @@
 
     /* chat area (same) */
     .chat-wrapper {
-      padding:12px;
-      padding-bottom: calc(var(--composer-height) + 24px);
-      /* full area uses internal scrolling only */
-      height: calc(100vh - var(--composer-height) - 80px); /* explicit usable height */
-      overflow:auto;
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: var(--header-height);
+      bottom: calc(var(--composer-height) + 12px);
+      padding: 12px;
+      overflow: auto;
     }
     .status-line { font-size:13px; color:var(--muted); margin-bottom:6px; }
 
@@ -89,6 +94,7 @@
     .reactions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
     .reactions button { color:var(--text); border:1px solid rgba(255,255,255,0.03); padding:4px 6px; border-radius:6px; cursor:pointer; background:transparent; }
 
+
     /* Actions under message are hidden (moved into contextual menu) */
     .message .msg-actions { display:none; }
 
@@ -122,7 +128,7 @@
       padding:6px;
       border-radius:8px;
       box-shadow:0 8px 24px rgba(0,0,0,0.6);
-      z-index:60;
+      z-index: 10000;
       min-width:160px;
     }
     .context-menu button {
@@ -143,7 +149,7 @@
       position:fixed;
       left:12px;
       right:12px;
-      bottom:12px;
+      bottom:6px;
       height:var(--composer-height);
       display:flex;
       gap:8px;
@@ -163,7 +169,7 @@
       position:fixed;
       left:12px;
       right:12px;
-      bottom: calc(var(--composer-height) + 18px);
+      bottom: calc(var(--composer-height) + 10px);
       background: var(--panel);
       padding:8px 12px;
       border-radius:8px;
@@ -185,20 +191,50 @@
     input[type="file"] { color:var(--text); }
 
     /* Pins panel */
-    .pins-panel { position:fixed; right:12px; bottom:calc(var(--composer-height) + 24px); width:360px; max-height:50vh; overflow:auto; background:var(--panel); border:1px solid rgba(255,255,255,0.03); padding:8px; border-radius:8px; z-index:45; }
+    .pins-panel { 
+      position: fixed;                 /* will be positioned by JS */
+      width: min(46vw, 540px);         /* match GIF picker width */
+      max-height: 52vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.03);
+      border-radius: 8px;
+      z-index: 9999;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+      display:none;
+    }
+    .pins-panel .pins-header{
+      position: sticky;
+      top:0;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:8px;
+      padding:8px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0));
+      border-bottom: 1px solid rgba(255,255,255,0.02);
+      z-index: 3;
+    }
+    .pins-panel .pins-body{
+      padding:8px;
+    }
 
     /* GIF picker layout & pinned header */
     #gifPicker {
       background: var(--panel);
       color: var(--text);
       border:1px solid rgba(255,255,255,0.03);
-      padding: 0;                /* header supplies padding */
       border-radius:8px;
       box-shadow:0 12px 36px rgba(0,0,0,0.6);
       z-index: 9999;
-      overflow: hidden;         /* inner grid scrolls */
+      overflow: hidden;
+
       max-width: 560px;
       width: min(46vw, 540px);
+
+      /* IMPORTANT: lock layout so only grid scrolls */
+      display: flex;
+      flex-direction: column;
     }
 
     /* header pinned to the top of the picker (stays visible) */
@@ -212,6 +248,7 @@
       background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0));
       border-bottom: 1px solid rgba(255,255,255,0.02);
       z-index: 3;
+      flex: 0 0 auto;
     }
 
     /* the grid area scrolls independently */
@@ -220,7 +257,10 @@
       display:flex;
       flex-wrap:wrap;
       gap:8px;
+
       overflow:auto;
+
+      flex: 1 1 auto;
       max-height: 52vh; /* will be dynamically clamped by JS too */
     }
 
@@ -232,13 +272,11 @@
     /* small helpers */
     .btn-small:active, .btn-primary:active { transform:translateY(1px); }
     a { color:var(--accent); }
-    .messages-end-spacer { height: calc(var(--composer-height) + 5px); flex-shrink:0; }
+    .messages-end-spacer { height: calc(var(--composer-height) - 12px); flex-shrink:0; }
     </style>
 </head>
 
 <body>
-  <h1>ChatterBox</h1>
-
   <div id="authBox" style="margin-bottom:12px;">
     <input id="authUser" placeholder="username" />
     <input id="authPass" type="password" placeholder="password" />
@@ -274,9 +312,13 @@
 
     <!-- Pins panel toggled via View Pins -->
     <div id="pinsPanel" class="pins-panel" style="display:none;">
-      <button id="closePins" class="btn-small">Close</button>
-      <div id="pinsContainer" class="pinsContainer"></div>
+      <div class="pins-header">
+        <div style="font-weight:600;">Pinned</div>
+        <button id="closePins" class="btn-small">Close</button>
+      </div>
+      <div id="pinsContainer" class="pins-body"></div>
     </div>
+
 
     <!-- Reply preview small area above composer -->
     <div id="replyBox" class="reply-box" style="display:none;">
@@ -300,7 +342,7 @@
     </div>
 
     <!-- GIF picker (positioning unchanged) -->
-    <div id="gifPicker" style="display:none; position:absolute; background:#424549; border:1px solid #2cff05; max-width:450px; max-height:360px; overflow:auto;"></div>
+    <div id="gifPicker" style="display:none; position:fixed;"></div>
   </div>
 
 
@@ -315,21 +357,101 @@
   let EMOJI_ALIASES = {};
 
   async function loadFavoriteMap() {
-  favoriteMap = {};
-  const token = localStorage.getItem('access_token');
-  if (!token) return;
-  try {
-    const res = await fetch('/gif/favorites', { headers: { 'token': token }});
-    if (!res.ok) return;
-    const j = await res.json();
-    (j.results || []).forEach(f => {
-      favoriteMap[String(f.gif_id)] = f.id;
-    });
-    console.log('[favorites] loaded', Object.keys(favoriteMap).length);
-  } catch (e) {
-    console.warn('[favorites] load failed', e);
+    favoriteMap = {};
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+    try {
+      const res = await fetch('/gif/favorites', { headers: { 'token': token }});
+      if (!res.ok) return;
+      const j = await res.json();
+      (j.results || []).forEach(f => {
+        favoriteMap[String(f.gif_id)] = f.id;
+      });
+      console.log('[favorites] loaded', Object.keys(favoriteMap).length);
+    } catch (e) {
+      console.warn('[favorites] load failed', e);
+    }
   }
+
+  function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+  function getBottomSafeY() {
+    const composer = document.getElementById('composer');
+    const replyBox = document.getElementById('replyBox');
+
+    let bottom = window.innerHeight - 8;
+
+    if (composer) {
+      bottom = Math.min(bottom, composer.getBoundingClientRect().top - 10);
+    }
+    // if reply box is visible, keep picker above it too
+    if (replyBox && replyBox.style.display !== 'none') {
+      bottom = Math.min(bottom, replyBox.getBoundingClientRect().top - 10);
+    }
+    return bottom;
   }
+
+
+  function getTopSafeY() {
+    const header = document.getElementById('appHeader');
+    const headerH = header && header.style.display !== 'none'
+      ? header.getBoundingClientRect().height
+      : 0;
+    return Math.max(8, Math.round(headerH + 8));
+  }
+
+
+
+  function positionPanelUnderButton(panelEl, btnEl, preferredWidthEl=null) {
+    if (!panelEl || !btnEl) return;
+
+    panelEl.style.position = 'fixed';
+    panelEl.style.display = 'block';
+
+    // measure after display
+    const btn = btnEl.getBoundingClientRect();
+    const panelRect = panelEl.getBoundingClientRect();
+
+    // width alignment: match GIF picker if desired
+    if (preferredWidthEl) {
+      const cs = window.getComputedStyle(preferredWidthEl);
+      const w = preferredWidthEl.getBoundingClientRect().width;
+
+      if (cs.display !== 'none' && w > 120) {
+        panelEl.style.width = `${Math.round(w)}px`;
+      } else {
+        panelEl.style.width = '';
+      }
+    }
+
+    // recompute after potential width change
+    const rect = panelEl.getBoundingClientRect();
+
+    // align right edge to button right edge (like dropdowns)
+    let left = Math.round(btn.right - rect.width);
+    left = clamp(left, 8, window.innerWidth - rect.width - 8);
+
+    // place below button; if not enough room, flip above
+    const belowTop = Math.round(btn.bottom + 8);
+    const aboveTop = Math.round(btn.top - rect.height - 8);
+
+    let top = belowTop;
+    if (belowTop + rect.height > window.innerHeight - 8 && aboveTop >= 8) {
+      top = aboveTop;
+    }
+    const bottomSafe = getBottomSafeY ? getBottomSafeY() : (window.innerHeight - 8);
+    top = clamp(top, 8, bottomSafe - rect.height);
+
+    panelEl.style.left = `${left}px`;
+    panelEl.style.top = `${top}px`;
+  }
+
+  function setPinsButtonState(isOpen) {
+    const btn = document.getElementById('viewPinsBtn');
+    if (!btn) return;
+    btn.textContent = isOpen ? 'Hide Pins' : 'Pins';
+  }
+
 
   function getGifProviderKeyFromResult(g) {
     return String(g.id || g.gif_id || g.url || '');
@@ -404,22 +526,6 @@
     if (el) {
       el.classList.add('referenced');
       window._referencedMsgId = id;
-    }
-  }
-
-  async function loadFavMap() {
-    favoriteMap = {};
-    const token = localStorage.getItem('access_token');
-    if (!token) return;
-    try {
-      const res = await fetch('/gif/favorites', { headers: { 'token': token }});
-      if (!res.ok) return;
-      const j = await res.json();
-      (j.results || []).forEach(f => {
-        favoriteMap[f.gif_id] = f.id;
-      });
-    } catch (e) {
-      console.warn('Failed to load favorites map', e);
     }
   }
   
@@ -584,7 +690,8 @@
     vid.style.maxWidth = '400px';
     content.appendChild(vid);
   } else {
-    content.innerHTML = marked.parse(text);
+    const html = marked.parse(text);
+    content.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   }
 
   body.appendChild(content);
@@ -760,7 +867,19 @@
     el.textContent = arr.length === 1 ? `${arr[0]} is typing…` : `${arr.join(", ")} are typing…`;
   }
 
+  // on page load, try auto-login if token + username exist
+  window.addEventListener('DOMContentLoaded', () => {
+    const token = localStorage.getItem('access_token');
+    const user = localStorage.getItem('username');
 
+    if (token && user) {
+      myId = user;            // <- ensure myId is set for connectSocket
+      connectSocket();        // will show chatUI on successful WS open
+    } else {
+      document.getElementById('chatUI').style.display = 'none';
+      document.getElementById('authBox').style.display = 'block';
+    }
+  });
 
   // delegated handler for edit buttons (works even if messages are rendered later)
   document.getElementById('container').addEventListener('click', (ev) => {
@@ -896,27 +1015,60 @@
     // position above the gifBtn, anchored to the composer and fixed to viewport
     gifPicker.style.position = 'fixed'; // important — keeps it visible and not extending page
     gifPicker.style.display = 'block';
-    setTimeout(() => {
+    
+    requestAnimationFrame(() => {
       const btnRect = gifBtn.getBoundingClientRect();
-      const pickerRect = gifPicker.getBoundingClientRect();
 
-      // prefer above the button, centered horizontally over the button
-      let left = Math.round(btnRect.left + (btnRect.width / 2) - (pickerRect.width / 2));
-      // clamp to screen edges
-      left = Math.max(8, Math.min(window.innerWidth - pickerRect.width - 8, left));
-
-      // try to place above the composer/button; if not enough room, place above top area
-      let top = Math.round(btnRect.top - pickerRect.height - 10);
-      if (top < 8) {
-        // place it above composer area (safe fallback)
-        top = Math.max(8, btnRect.top - pickerRect.height - 10);
+      // match width to pins panel if available
+      const pinsPanel = document.getElementById('pinsPanel');
+      if (pinsPanel && pinsPanel.style.display === 'block') {
+        const pw = pinsPanel.getBoundingClientRect().width;
+        if (pw > 200) gifPicker.style.width = `${Math.round(pw)}px`;
+      } else {
+        gifPicker.style.width = ''; // fall back to CSS width
       }
+
+      const header = gifPicker.querySelector('.picker-header');
+      const headerH = header ? header.getBoundingClientRect().height : 44;
+
+      const topSafe = getTopSafeY();
+      const bottomSafe = getBottomSafeY();
+
+      const spaceAbove = btnRect.top - topSafe - 10;
+      const spaceBelow = bottomSafe - btnRect.bottom - 10;
+
+      const placeAbove = spaceAbove >= 240 || spaceAbove >= spaceBelow;
+
+      // Pick a hard height so it can't grow later as images load
+      const available = placeAbove ? spaceAbove : spaceBelow;
+      const pickerH = Math.max(240, Math.floor(Math.min(window.innerHeight * 0.60, available)));
+
+      gifPicker.style.height = `${pickerH}px`;
+
+      const grid = gifPicker.querySelector('#gifGrid');
+      if (grid) {
+        const gridH = Math.max(180, pickerH - headerH);
+        grid.style.height = `${gridH}px`;   // <- height, not maxHeight
+      }
+
+      // measure AFTER setting height
+      const rect = gifPicker.getBoundingClientRect();
+
+      // RIGHT-ALIGN to button (dropdown style)
+      let left = Math.round(btnRect.right - rect.width);
+      left = clamp(left, 8, window.innerWidth - rect.width - 8);
+
+      let top = placeAbove
+        ? Math.round(btnRect.top - rect.height - 10)
+        : Math.round(btnRect.bottom + 10);
+
+      top = clamp(top, topSafe, bottomSafe - rect.height);
 
       gifPicker.style.left = `${left}px`;
       gifPicker.style.top = `${top}px`;
-      //gifPicker.style.left = `813.797px`
-      //gifPicker.style.top = `496px`
-    }, 40);
+    });
+
+
 
 
     // wire the buttons (same behavior as your existing handlers)
@@ -1002,7 +1154,7 @@
             const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
             if (res.ok) { delete favoriteMap[idKey]; favBtn.textContent = '♡'; updateGifFavUI(idKey); }
           } else {
-            const payload = { gif_id: g.id || Sting(g.url), url: g.url, preview: g.preview, title: g.title || '' };
+            const payload = { gif_id: g.id || String(g.url), url: g.url, preview: g.preview, title: g.title || '' };
             const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
             if (res.ok) {
               const j = await res.json().catch(()=>({}));
@@ -1223,70 +1375,6 @@
     }
   }
 
-  function openEditUI(messageId) {
-    const el = document.getElementById('msg-' + messageId);
-    if (!el) return;
-    const contentEl = el.querySelector('.content');
-    if (!contentEl) return;
-
-    // create textarea and Save/Cancel
-    const textarea = document.createElement('textarea');
-    textarea.style.width = '100%';
-    textarea.rows = 3;
-    textarea.value = (msgIndex[messageId] && msgIndex[messageId].content) || '';
-    textarea.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' && !ev.shiftKey) {
-        ev.preventDefault();
-        saveBtn.click();
-      }
-    });
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Save';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-
-    // replace content element with editor
-    contentEl.innerHTML = '';
-    contentEl.appendChild(textarea);
-    contentEl.appendChild(saveBtn);
-    contentEl.appendChild(cancelBtn);
-
-    saveBtn.onclick = () => {
-      const newText = textarea.value.trim();
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        alert('Not connected');
-        return;
-      }
-      socket.send(JSON.stringify({ type: 'edit', id: messageId, content: newText }));
-      // optimistically update UI (server will broadcast too)
-      msgIndex[messageId].content = newText;
-      msgIndex[messageId].edited_at = new Date().toISOString();
-      // re-render node to restore normal view
-      const newNode = renderMessage(msgIndex[messageId]);
-      el.replaceWith(newNode);
-    };
-
-    cancelBtn.onclick = () => {
-      // restore existing content display
-      const newNode = renderMessage(msgIndex[messageId]);
-      el.replaceWith(newNode);
-    };
-  }
-
-
-  // position
-//  const r = anchorEl.getBoundingClientRect();
-//  picker.style.left = `${r.left}px`;
-//  picker.style.top = `${r.bottom + window.scrollY + 6}px`;
-//
-//  setTimeout(()=> window.addEventListener('click', outsideClick));
-//  function outsideClick(e) {
-//    if (!picker.contains(e.target) && e.target !== anchorEl) closeEmojiPicker();
-//  }
-//  picker._outsideFn = outsideClick;
-  
-
   function replaceAliasesInText(text) {
     return text.replace(/:([a-zA-Z0-9_+-]+):/g, (m, alias) => {
       const ch = EMOJI_ALIASES[alias.toLowerCase()];
@@ -1391,8 +1479,8 @@ function resetChatUI(){
   //Clear DOM
   document.getElementById('container').innerHTML = '';
   document.getElementById('pinsContainer').innerHTML = '';
-  document.getElementById('pinsContainer').style.display = 'none';
-  document.getElementById('viewPinsBtn').textContent = 'View Pins';
+  closePinsPanel();
+  document.getElementById('viewPinsBtn').textContent = 'Pins';
 
   // Clear client state
   for (const k in msgIndex) delete msgIndex[k];
@@ -1408,6 +1496,8 @@ function resetChatUI(){
   document.getElementById('replyBox').style.display = 'none';
   document.getElementById('replyPreview').textContent = '';
 }
+
+
 
 // centralized connect function
 async function connectSocket() {
@@ -1445,8 +1535,12 @@ async function connectSocket() {
     // Set header username + avatar
     const headerUserEl = document.getElementById('headerUsername');
     const headerAvatarEl = document.getElementById('headerAvatar');
+    const title = document.getElementById('pageTitle')
+
     if (headerUserEl) headerUserEl.textContent = myId || '';
     if (headerAvatarEl) headerAvatarEl.textContent = (myId && myId[0]) ? myId[0].toUpperCase() : '?';
+    if (title) title.style.display = 'none';
+
     document.getElementById('appHeader').style.display = 'flex';
     document.getElementById('headerAvatar').style.display = 'flex';
 
@@ -1484,21 +1578,6 @@ async function connectSocket() {
     document.getElementById('status').textContent = `Disconnected (code ${ev.code})`;
     if (ev.code === 1008) alert('Connection closed due to auth/policy (1008). Token may be invalid / expired.');
   });
-
-  // on page load, try auto-login if token + username exist
-  window.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('access_token');
-    const user = localStorage.getItem('username');
-
-    if (token && user) {
-      myId = user;            // <- ensure myId is set for connectSocket
-      connectSocket();        // will show chatUI on successful WS open
-    } else {
-      document.getElementById('chatUI').style.display = 'none';
-      document.getElementById('authBox').style.display = 'block';
-    }
-  });
-
 
   socket.addEventListener('message', (ev) => {
     // server sends JSON payloads
@@ -1575,6 +1654,8 @@ async function connectSocket() {
           el.replaceWith(newNode);
         }
       }
+      const pinsPanel = document.getElementById('pinsPanel');
+      if (pinsPanel && pinsPanel.style.display === 'block') buildPinsUI();
       return;
     }
 
@@ -1704,22 +1785,88 @@ async function connectSocket() {
     sendTyping(false);
   };
 
-  document.getElementById('viewPinsBtn').onclick = () => {
-    const pc = document.getElementById('pinsContainer');
-    if (pc.style.display === 'none') {
-      //show pinned messages
-      pc.innerHTML = '';
-      Object.values(msgIndex).filter(m => m.pinned).forEach(m => {
-        const node = renderMessage(m);
-        pc.appendChild(node);
+  function buildPinsUI() {
+    const pinsContainer = document.getElementById('pinsContainer');
+    pinsContainer.innerHTML = '';
+
+    const pinned = Object.values(msgIndex)
+      .filter(m => m && m.pinned && !m.deleted)
+      .sort((a, b) => {
+        // newest pinned first
+        const at = a.pinned_at ? Date.parse(a.pinned_at) : 0;
+        const bt = b.pinned_at ? Date.parse(b.pinned_at) : 0;
+        return bt - at;
       });
-      pc.style.display = 'block';
-      document.getElementById('viewPinsBtn').textContent = 'Hide Pins';
-    } else {
-      pc.style.display = 'none';
-      document.getElementById('viewPinsBtn').textContent = 'View Pins'
+
+    if (!pinned.length) {
+      const empty = document.createElement('div');
+      empty.style.color = 'var(--muted)';
+      empty.style.padding = '8px';
+      empty.textContent = 'No pinned messages yet.';
+      pinsContainer.appendChild(empty);
+      return;
     }
+
+    pinned.forEach(m => {
+      const node = renderMessage(m);
+
+      // Make the whole pin entry clickable → jump to message in main chat
+      node.style.cursor = 'pointer';
+      node.addEventListener('click', (ev) => {
+        // don’t steal clicks meant for buttons inside the pin (fav/reaction/etc)
+        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+        if (tag === 'button' || tag === 'input' || tag === 'textarea' || tag === 'a') return;
+
+        closePinsPanel();
+        scrollToMessageId(m.id);
+      });
+
+      pinsContainer.appendChild(node);
+    });
+  }
+
+
+  function openPinsPanel() {
+    const pinsPanel = document.getElementById('pinsPanel');
+    const pinsBtn = document.getElementById('viewPinsBtn');
+    const gifPicker = document.getElementById('gifPicker');
+
+    buildPinsUI();
+    // position under Pins button; make width match gif picker when it's present
+    positionPanelUnderButton(pinsPanel, pinsBtn, gifPicker);
+    setPinsButtonState(true);
+
+    // close on outside click
+    setTimeout(() => {
+      function outside(e){
+        if (!pinsPanel.contains(e.target) && e.target !== pinsBtn) {
+          closePinsPanel();
+          window.removeEventListener('click', outside);
+        }
+      }
+      window.addEventListener('click', outside);
+      pinsPanel._outside = outside;
+    }, 0);
+  }
+
+  function closePinsPanel() {
+    const pinsPanel = document.getElementById('pinsPanel');
+    if (pinsPanel) {
+      pinsPanel.style.display = 'none';
+      if (pinsPanel._outside) window.removeEventListener('click', pinsPanel._outside);
+    }
+    setPinsButtonState(false);
+  }
+
+  document.getElementById('viewPinsBtn').onclick = () => {
+    const pinsPanel = document.getElementById('pinsPanel');
+    const open = pinsPanel.style.display === 'block';
+    if (open) closePinsPanel();
+    else openPinsPanel();
   };
+
+  document.getElementById('closePins').onclick = () => closePinsPanel();
+
 
   document.getElementById('fileInput').onchange = async (e) => {
     const file = e.target.files[0];

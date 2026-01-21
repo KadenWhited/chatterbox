@@ -115,7 +115,7 @@ class ConnectionManager:
         print(f"[disconnect] {meta}")
 
     def usernames_online(self):
-        return sorted({meta.get("username") for meta in self.active_connections.value() if meta.get("username")})
+        return sorted({meta.get("username") for meta in self.active_connections.values() if meta.get("username")})
 
     async def send_personal_message(self, payload: Dict[str, Any], websocket: WebSocket):
         try:
@@ -185,31 +185,53 @@ def query_giphy_search(q: str, limit: int = 20, offset: int = 0):
     if not GIPHY_KEY:
         print("[gif] Warning: GIPHY_API_KEY not set")
         return {"data": []}
-    
+
     cache_key = f"giphy:search:{q}:{limit}:{offset}"
     if cache_key in gif_search_cache:
         return gif_search_cache[cache_key]
-    
+
     url = "https://api.giphy.com/v1/gifs/search"
-    params = {"api_key": GIPHY_KEY, "q": q, "limit": limit, "offset": offset, "rating":"r", "lang":"en"}
+    params = {
+        "api_key": GIPHY_KEY,
+        "q": q,
+        "limit": limit,
+        "offset": offset,
+        "rating": "r",
+        "lang": "en",
+    }
 
     try:
-        r = requests.get(url, params=params, timeout=5)
-        result = r.json() if r.status_code == 200 else {"data": []}
-    except Exception:
+        r = requests.get(url, params=params, timeout=(3.05, 12))
+        r.raise_for_status()
+        result = r.json()
+    except requests.exceptions.RequestException as e:
+        print("[gif] search request failed:", repr(e))
         result = {"data": []}
 
     gif_search_cache[cache_key] = result
     return result
 
-def query_giphy_trending(limit: int= 20, offset: int= 0):
+
+def query_giphy_trending(limit: int = 20, offset: int = 0):
+    if not GIPHY_KEY:
+        print("[gif] Warning: GIPHY_API_KEY not set")
+        return {"data": []}
+
     cache_key = f"giphy:trending:{limit}:{offset}"
     if cache_key in gif_search_cache:
         return gif_search_cache[cache_key]
+
     url = "https://api.giphy.com/v1/gifs/trending"
     params = {"api_key": GIPHY_KEY, "limit": limit, "offset": offset}
-    r = requests.get(url, params=params, timeout=5)
-    result = r.json() if r.status_code == 200 else {"data": []}
+
+    try:
+        r = requests.get(url, params=params, timeout=(3.05, 12))
+        r.raise_for_status()
+        result = r.json()
+    except requests.exceptions.RequestException as e:
+        print("[gif] trending request failed:", repr(e))
+        result = {"data": []}  # keep shape consistent with your route
+
     gif_search_cache[cache_key] = result
     return result
 
