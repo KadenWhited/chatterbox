@@ -49,7 +49,7 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["https://chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
+#app.add_middleware(TrustedHostMiddleware, allowed_hosts=["https://chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
 
 def get_db():
     db = SessionLocal()
