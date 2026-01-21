@@ -105,6 +105,7 @@ class ConnectionManager:
         self.messages = []  # stores logs
 
     async def connect(self, websocket: WebSocket, client_meta: Dict[str, Any]):
+        print("DEBUG connect():", type(websocket), type(client_meta))
         await websocket.accept()
         self.active_connections[websocket] = client_meta
         print(f"[connect] {client_meta}")
@@ -112,6 +113,9 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket):
         meta = self.active_connections.pop(websocket, None)
         print(f"[disconnect] {meta}")
+
+    def usernames_online(self):
+        return sorted({meta.get("username") for meta in self.active_connections.value() if meta.get("username")})
 
     async def send_personal_message(self, payload: Dict[str, Any], websocket: WebSocket):
         try:
@@ -122,15 +126,19 @@ class ConnectionManager:
 
     async def broadcast(self, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
+        dead = []
         # remove broken sockets
-        for conn in list(self.active_connections.keys()):
+        for conn in self.active_connections.keys():
             if conn == exclude:
                 continue
             try:
                 await conn.send_text(text)
             except Exception as e:
                 print(f"[broadcast] removing broken socket {self.active_connections.get(conn)}: {e}")
-                self.disconnect(conn)
+                dead.append(conn)
+
+        for conn in dead:
+            self.disconnect(conn)
 
     def store_message(self, msg: Dict[str, Any]):
         self.messages.append(msg)
@@ -415,7 +423,11 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             else:
                 safe_gid = orig_gid
 
-            existing = db.query(Favorite).filter(Favorite.user_id==uid, Favorite.gif_id==safe_gid).first()
+            existing = db.query(Favorite).filter(
+                Favorite.user_id == uid, 
+                Favorite.gif_id == str(safe_gid)
+                ).first()
+            
             if existing:
                 return {"ok": True, "id": existing.id}
             
@@ -442,7 +454,7 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             fav = Favorite(
                 user_id=uid,
                 gif_id=safe_gid,
-                url=(url or "")[:2048] or None,
+                url=(url or "")[:2048],
                 preview=(preview or "")[:1024] or None,
                 title=(title or "")[:256] or "",
                 metadata_json=(metadata or {"original_gif_id": str(gif_id)})
@@ -837,6 +849,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 t = connectionmanager.find_message(target_id)
                 if t:
                     await connectionmanager.send_personal_message({"type":"reply_preview","id":target_id,"content": t["content"], "deleted": t["deleted"]}, websocket)
+
+            elif msg_type == "typing":
+                is_typing = bool(data.get("is_typing"))
+                await connectionmanager.broadcast({
+                    "type": "typing",
+                    "user": client_meta["username"],
+                    "is_typing": is_typing
+                }, exclude=websocket)
 
             else:
                 await connectionmanager.send_personal_message({"type":"error","error":"unknown_type","got": msg_type}, websocket)

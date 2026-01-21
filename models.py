@@ -14,6 +14,9 @@ class User(Base):
     password_hash = Column(String(256), nullable=True)
     display_name = Column(String(120), nullable=True)
     avatar = Column(String(256), nullable=True)
+    status = Column(String(32), nullable=True)
+    bio = Column(String(200), nullable=True)
+    avatar_color = Column(String(16), nullable=True)
     created_at = Column(DateTime, default= now_utc)
 
 class Message(Base):

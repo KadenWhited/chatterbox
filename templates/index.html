@@ -261,6 +261,11 @@
       </div>
     </header>
 
+    
+  <div id="presenceLine" style="color:var(--muted); font-size:12px;"></div>
+  <div id="typingLine" style="color:var(--muted); font-size:12px;"></div>
+
+
     <!-- Main chat area -->
     <main class="chat-wrapper">
       <div id="status" class="status-line"></div>
@@ -392,6 +397,7 @@
       window._referencedMsgId = null;
     }
   }
+
   function highlightReferencedMsg(id) {
     clearReferencedHighlight();
     const el = document.getElementById('msg-' + id);
@@ -735,6 +741,25 @@
     wrapper.appendChild(body);
     return wrapper;
   }
+
+  const onlineUsers = new Set();
+  const typingUsers = new Set();
+
+  function renderPresence() {
+    const el = document.getElementById("presenceLine");
+    if (!el) return;
+    const arr = Array.from(onlineUsers).sort();
+    el.textContent = arr.length ? ("Online: " + arr.join(", ")) : "No one online";
+  }
+
+  function renderTyping() {
+    const el = document.getElementById("typingLine");
+    if (!el) return;
+    const arr = Array.from(typingUsers).sort();
+    if (!arr.length) { el.textContent = ""; return; }
+    el.textContent = arr.length === 1 ? `${arr[0]} is typing…` : `${arr.join(", ")} are typing…`;
+  }
+
 
 
   // delegated handler for edit buttons (works even if messages are rendered later)
@@ -1500,6 +1525,28 @@ async function connectSocket() {
       return;
     }
 
+    if (payload.type === "presence_snapshot") {
+      onlineUsers.clear();
+      (payload.online || []).forEach(u => onlineUsers.add(u));
+      renderPresence();
+      return;
+    }
+
+    if (payload.type === "presence") {
+      if (payload.status === "online") onlineUsers.add(payload.user);
+      else onlineUsers.delete(payload.user);
+      renderPresence();
+      return;
+    }
+
+    if (payload.type === "typing") {
+      if (payload.is_typing) typingUsers.add(payload.user);
+      else typingUsers.delete(payload.user);
+      renderTyping();
+      return;
+    }
+
+
 
     if (payload.type === 'message') {
       const node = renderMessage(payload);
@@ -1597,6 +1644,27 @@ async function connectSocket() {
     });
   })();
 
+  let typingTimer = null;
+  let typingState = false;
+
+  function sendTyping(isTyping) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "typing", is_typing: isTyping }))
+  }
+
+  const inputEl = document.getElementById('inputText');
+  inputEl.addEventListener('input', () => {
+    if (!typingState) {
+      typingState = true;
+      sendTyping(true);
+    }
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => {
+      typingState = false;
+      sendTyping(false);
+    }, 1200);
+  });
+
 
 
   // minimal connect button behavior now calls connectSocket()
@@ -1632,7 +1700,8 @@ async function connectSocket() {
     document.getElementById('replyBox').style.display = 'none';
     document.getElementById('replyPreview').textContent = '';
 
-
+    typingState = false;
+    sendTyping(false);
   };
 
   document.getElementById('viewPinsBtn').onclick = () => {
