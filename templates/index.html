@@ -296,12 +296,15 @@
         <div id="headerAvatar" class="avatar small">?</div>
         <div id="headerUsername" class="header-username"></div>
       </div>
+
       <div class="header-right">
         <button id="viewPinsBtn" class="btn-small">Pins</button>
+        <button id="roomsBtn" class="btn-small">Rooms</button>
         <button id="settingsBtn" class="btn-small">Settings</button>
         <button id="connectBtn" class="btn-small">Connect</button>
         <button id="logoutBtn" class="btn-small">Logout</button>
       </div>
+
       <div id="settingsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
         <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -317,6 +320,23 @@
             <button id="saveSettings" class="btn-primary">Save</button>
             <div id="settingsMsg" style="color:var(--muted); font-size:12px;"></div>
           </div>
+        </div>
+      </div>
+
+      <div id="roomsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
+        <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700;">Rooms</div>
+            <button id="closeRooms" class="btn-small">Close</button>
+          </div>
+
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <input id="newRoomName" placeholder="new room name" style="flex:1;" />
+            <button id="createRoomBtn" class="btn-primary">Create</button>
+          </div>
+
+          <div id="roomsList" style="margin-top:12px; display:grid; gap:8px;"></div>
+          <div id="roomsMsg" style="color:var(--muted); font-size:12px; margin-top:8px;"></div>
         </div>
       </div>
 
@@ -1517,13 +1537,17 @@ function resetChatUI(){
 
   // Clear input
   const input = document.getElementById('inputText');
-
-
   if (input) input.value = '';
 
   // Hide reply box
   document.getElementById('replyBox').style.display = 'none';
   document.getElementById('replyPreview').textContent = '';
+
+  onlineUsers.clear();
+  typingUsers.clear();
+  renderPresence();
+  renderTyping();
+
 }
 
 
@@ -1554,7 +1578,8 @@ async function connectSocket() {
   const isSecure = (window.location.protocol === 'https:');
   const wsProto = isSecure ? 'wss' : 'ws';
   const host = window.location.host; // includes port if any
-  const wsUrl = `${wsProto}://${host}/ws?token=${encodeURIComponent(token)}`;
+  const roomId = await ensureDefaultRoom();
+  const wsUrl = `${wsProto}://${host}/ws?token=${encodeURIComponent(token)}&room_id=${encodeURIComponent(roomId)}`;
 
   console.log('[connectSocket] opening', wsUrl);
   document.getElementById('status').textContent = 'Connecting...';
@@ -1787,6 +1812,64 @@ async function connectSocket() {
     }
   }
 
+  async function fetchRooms() {
+    const token = localStorage.getItem('access_token');
+    const res = await fetch('/rooms', { headers: { token }});
+    if (!res.ok) throw new Error('rooms fetch failed');
+    const j = await res.json();
+    return j.results || [];
+  }
+
+  async function ensureDefaultRoom() {
+    let rid = localStorage.getItem('room_id');
+
+    const rooms = await fetchRooms();
+
+        
+    if (rid) {
+      const ok = rooms.some(r => String(r.id) === String(rid));
+      if (ok) return rid;
+
+      localStorage.removeItem('room_id');
+      rid = null;
+    }
+
+    // pick "general" if present, else first, else create it
+    let general = rooms.find(r => (r.name || '').toLowerCase() === 'general');
+    if (!general && rooms.length) general = rooms[0];
+
+    if (!general) {
+      const token = localStorage.getItem('access_token');
+      const cr = await fetch('/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', token },
+        body: JSON.stringify({ name: 'general' })
+      });
+      const cj = await cr.json();
+      rid = cj.id;
+    } else {
+      rid = general.id;
+    }
+
+    localStorage.setItem('room_id', rid);
+    return rid;
+  }
+
+  async function switchRoom(newRoomId) {
+    if (!newRoomId) return;
+    localStorage.setItem('room_id', newRoomId);
+
+    // disconnect existing WS
+    if (socket) { try { socket.close(); } catch(e){} socket = null; }
+
+    // reset UI
+    resetChatUI();
+
+    // reconnect
+    await connectSocket();
+  }
+
+
   // send on Enter (Shift+Enter for newline) — attach once on initial load
   (function attachEnterSend() {
     const inputEl = document.getElementById('inputText');
@@ -1828,6 +1911,56 @@ async function connectSocket() {
   document.getElementById('connectBtn').onclick = () => {
     connectSocket();
   };
+
+  document.getElementById('roomsBtn').onclick = async () => {
+    try {
+      const rooms = await fetchRooms();
+      const list = document.getElementById('roomsList');
+      list.innerHTML = '';
+      const current = localStorage.getItem('room_id');
+
+      rooms.forEach(r => {
+        const row = document.createElement('button');
+        row.className = 'btn-small';
+        row.textContent = (r.id === current) ? `✓ ${r.name}` : r.name;
+        row.onclick = async () => {
+          document.getElementById('roomsModal').style.display = 'none';
+          await switchRoom(r.id);
+        };
+        list.appendChild(row);
+      });
+
+      document.getElementById('roomsModal').style.display = 'block';
+    } catch (e) {
+      alert('Failed to load rooms: ' + e);
+    }
+  };
+
+  document.getElementById('closeRooms').onclick = () => {
+    document.getElementById('roomsModal').style.display = 'none';
+  };
+
+  document.getElementById('createRoomBtn').onclick = async () => {
+    const name = (document.getElementById('newRoomName').value || '').trim();
+    if (!name) return;
+
+    const token = localStorage.getItem('access_token');
+    const res = await fetch('/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', token },
+      body: JSON.stringify({ name })
+    });
+    const j = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      document.getElementById('roomsMsg').textContent = 'Create failed: ' + (j.detail || res.status);
+      return;
+    }
+    document.getElementById('roomsMsg').textContent = `Created: ${j.name}`;
+    document.getElementById('newRoomName').value = '';
+    // refresh list
+    document.getElementById('roomsBtn').click();
+  };
+
 
   document.getElementById('settingsBtn').onclick = async () => {
     const me = await fetchMe();

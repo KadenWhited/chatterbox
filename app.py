@@ -15,11 +15,12 @@ from cachetools import TTLCache
 
 #Authentication/Database
 from database import SessionLocal
-from models import User, Message, Favorite
+from models import User, Message, Favorite, Room
 from auth_utils import hash_password, verify_password, create_access_token, decode_access_token
 from starlette.status import HTTP_401_UNAUTHORIZED
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError, DataError
+from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 
@@ -108,7 +109,6 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, client_meta: Dict[str, Any]):
         print("DEBUG connect():", type(websocket), type(client_meta))
-        await websocket.accept()
         self.active_connections[websocket] = client_meta
         print(f"[connect] {client_meta}")
 
@@ -116,8 +116,12 @@ class ConnectionManager:
         meta = self.active_connections.pop(websocket, None)
         print(f"[disconnect] {meta}")
 
-    def usernames_online(self):
-        return sorted({meta.get("username") for meta in self.active_connections.values() if meta.get("username")})
+    def usernames_online_in_room(self, room_id: str):
+        return sorted({
+            meta.get("username")
+            for meta in self.active_connections.values() 
+            if meta.get("username") and meta.get("room_id") == room_id
+            })
 
     async def send_personal_message(self, payload: Dict[str, Any], websocket: WebSocket):
         try:
@@ -125,6 +129,21 @@ class ConnectionManager:
         except Exception as e:
             print("[send_personal_message] failed to send to", self.active_connections.get(websocket), "error:", repr(e))
             raise
+
+    async def broadcast_room(self, room_id: str, payload: Dict[str, Any], exclude: WebSocket=None):
+        text = json.dumps(payload)
+        dead = []
+        for ws, meta in list(self.active_connections.items()):
+            if meta.get("room_id") != room_id:
+                continue
+            if exclude and ws == exclude:
+                continue
+            try:
+                await ws.send_text(text)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
 
     async def broadcast(self, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
@@ -142,17 +161,17 @@ class ConnectionManager:
         for conn in dead:
             self.disconnect(conn)
 
-    async def broadcast_presence_snapshot(self):
-        await self.broadcast({
+    async def broadcast_presence_snapshot_room(self, room_id: str):
+        await self.broadcast_room(room_id, {
             "type": "presence_snapshot",
-            "online": self.usernames_online()
+            "online": self.usernames_online_in_room(room_id)
         })
 
-    async def broadcast_presence_change(self, username: str, status: str):
-        await self.broadcast({
+    async def broadcast_presence_change_room(self, room_id: str, username: str, status: str):
+        await self.broadcast_room(room_id, {
             "type": "presence",
             "user": username,
-            "status": status # "online" or "offline"
+            "status": status
         })
 
     def store_message(self, msg: Dict[str, Any]):
@@ -283,6 +302,9 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
 
+class RoomCreate(BaseModel):
+    name: str
+
 class ProfileOut(BaseModel):
     id: int
     username: str
@@ -363,7 +385,28 @@ def login(payload: RegisterRequest, db=Depends(get_db)):
     token = create_access_token(user.id)
     return {"access_token": token, "username": user.username, "user_id": user.id}
 
+@app.post("/rooms")
+async def create_room(payload: RoomCreate, current_user=Depends(get_current_user)):
+    name = (payload.name or "").strip()
+    if not name or len(name) > 80:
+        raise HTTPException(status_code=400, detail="invalid room name")
+    
+    def _create():
+        db = SessionLocal()
+        try:
+            existing = db.query(Room).filter(Room.name == name).first()
+            if existing:
+                return {"id": existing.id, "name": existing.name, "created": False}
+            
+            r = Room(name=name)
+            db.add(r)
+            db.commit()
+            db.refresh(r)
+            return {"id": r.id, "name": r.name, "created": True}
+        finally:
+            db.close()
 
+    return await run_in_threadpool(_create)
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -462,6 +505,16 @@ async def update_me(payload: ProfileUpdate, current_user=Depends(get_current_use
 
     return await run_in_threadpool(_upd, current_user["id"], payload)
 
+@app.get("/rooms")
+async def list_rooms(current_user=Depends(get_current_user)):
+    def _list():
+        db = SessionLocal()
+        try:
+            rooms = db.query(Room).order_by(Room.created_at.asc()).all()
+            return [{"id": r.id, "name": r.name} for r in rooms]
+        finally:
+            db.close()
+    return {"results": await run_in_threadpool(_list)}
 
 @app.get("/gif/search")
 def gif_search(q: str, limit: int = 20, offset: int = 0):
@@ -607,34 +660,41 @@ async def remove_gif_favorite(id: int, current_user = Depends(get_current_user))
 def read_index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+
+
+
 # username = string to track names
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
 
-    try:
-        peer = websocket.client
-    except Exception:
-        peer = None
-    print("[ws] incoming connection from peer:", peer)
+    token = websocket.query_params.get("token")
+    room_id = websocket.query_params.get("room_id")
 
     # --- auth / user lookup ---
-    token = websocket.query_params.get("token")
     print("[ws] token present:", bool(token))
-
     if not token:
         print("[ws] closing websocket: no token provided")
-        await websocket.close(code=1008)  # policy violation / auth required
+        await websocket.close(code=1008, reason="missing token")  # policy violation / auth required
         return
 
-    user_id = None
+    if not room_id:
+        print("[ws] closing websocket: no room id")
+        await websocket.close(code=1008, reason="missing room_id")
+        return
+
+    peer = getattr(websocket, "client", None)
+    print("[ws] incoming connection from peer:", peer)
+
     try:
         user_id = decode_access_token(token)
     except Exception as e:
         print("[ws] decode_access_token raised:", repr(e))
-    print("[ws] decode_access_token ->", user_id)
+        user_id = None
 
+    print("[ws] decode_access_token ->", user_id)
     if not user_id:
-        print("[ws] closing websockey: token invalid/expired")
+        print("[ws] closing websocket: token invalid/expired")
         await websocket.close(code=1008)
         return
 
@@ -649,23 +709,35 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             db.close()
 
-    user_info = None
-    try:
-        user_info = await run_in_threadpool(get_user_by_id, user_id)
-    except Exception as e:
-        print("[ws] get_user_by_id error:", repr(e))
-    print("[ws] get_user_by_id ->", user_info)
+    def get_room_by_id(rid: str):
+        db = SessionLocal()
+        try:
+            r = db.query(Room).filter(Room.id == str(rid)).first()
+            return {"id": r.id, "name": r.name} if r else None
+        finally:
+            db.close()
 
+    user_info = await run_in_threadpool(get_user_by_id, user_id)
     if not user_info:
         print("[ws] closing websocket: user not found for id", user_id)
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="user not found")
+        return
+    
+    room_info = await run_in_threadpool(get_room_by_id, room_id)
+    if not room_info:
+        await websocket.close(code=1008, reason="room not found")
         return
 
-    client_meta = {"user_id": user_info["id"], "username": user_info["username"]}
+    client_meta = {
+        "user_id": user_info["id"], 
+        "username": user_info["username"], 
+        "room_id": room_id
+    }
+    
     try:
         await connectionmanager.connect(websocket, client_meta)
-        await connectionmanager.broadcast_presence_snapshot()
-        await connectionmanager.broadcast_presence_change(client_meta["username"], "online")
+        await connectionmanager.broadcast_presence_snapshot_room(room_id)
+        await connectionmanager.broadcast_presence_change_room(room_id, client_meta["username"], "online")
 
     except Exception as e:
         print("[ws] connectionmanager.connect failed:", repr(e))
@@ -674,12 +746,13 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
         return
+    
 
     # --- load history (threadpool DB access) ---
     def load_history(limit=200):
         db = SessionLocal()
         try:
-            rows = db.query(Message).order_by(Message.timestamp.asc()).limit(limit).all()
+            rows = (db.query(Message).filter(Message.room_id == room_id).order_by(Message.timestamp.asc()).limit(limit).all())
             out = []
             for m in rows:
                 out.append({
@@ -758,6 +831,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             timestamp=timestamp,
                             content=data.get("content",""),
                             reply_to=data.get("reply_to"),
+                            room_id=room_id,
                             deleted=False,
                             pinned=False,
                             reactions={}
@@ -774,6 +848,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
                         "content": data.get("content",""),
                         "reply_to": data.get("reply_to"),
+                        "room_id": room_id,
                         "deleted": False,
                         "pinned": False,
                         "reactions": {}
@@ -783,7 +858,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 connectionmanager.store_message(out_msg)
                 await connectionmanager.send_personal_message(out_msg, websocket)
-                await connectionmanager.broadcast(out_msg, exclude=websocket)
+
+                await connectionmanager.broadcast_room(room_id, out_msg, exclude=websocket)
 
             # -------------- DELETE --------------
             elif msg_type == "delete":
@@ -820,7 +896,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     t["deleted"] = True
                     t["content"] = ""
 
-                await connectionmanager.broadcast({"type": "delete", "id": target_id})
+                await connectionmanager.broadcast_room(room_id, {"type": "delete", "id": target_id})
 
             # ------------------ EDIT -------------------
             elif msg_type == "edit":
@@ -861,7 +937,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     t["edited_at"] = edited_at_dt.isoformat().replace("+00:00", "Z")
 
                 # broadcast edit to everyone
-                await connectionmanager.broadcast({
+                await connectionmanager.broadcast_room(room_id, {
                     "type": "edit",
                     "id": target_id,
                     "content": new_content,
@@ -887,7 +963,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     def count_pins():
                         db = SessionLocal()
                         try:
-                            return db.query(Message).filter(Message.pinned == True).count()
+                            return db.query(Message).filter(Message.room_id == room_id, Message.pinned == True).count()
                         finally:
                             db.close()
                     current_pinned = await run_in_threadpool(count_pins)
@@ -897,9 +973,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # update in-memory
                 if pin_flag:
+                    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
                     t["pinned"] = True
-                    t["pinned_by"] = client_meta["username"]
-                    t["pinned_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00","Z")
+                    t["pinned_by"] = client_meta["user_id"]
+                    t["pinned_at"] = now_iso
                 else:
                     t["pinned"] = False
                     t["pinned_by"] = None
@@ -923,8 +1000,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     finally:
                         db.close()
 
-                await run_in_threadpool(update_pin_db, target_id, t["pinned"], client_meta["user_id"] if t["pinned"] else None, t["pinned_at"])
-                await connectionmanager.broadcast({"type": "pin", "id": target_id, "pinned": t["pinned"], "pinned_by": t["pinned_by"], "pinned_at": t["pinned_at"]})
+                await run_in_threadpool(update_pin_db, target_id, t["pinned"], t["pinned_by"], t["pinned_at"])
+                await connectionmanager.broadcast_room(room_id, {
+                    "type": "pin", 
+                    "id": target_id, 
+                    "pinned": t["pinned"], 
+                    "pinned_by": t["pinned_by"], 
+                    "pinned_by_username": client_meta["username"] if pin_flag else None,
+                    "pinned_at": t.get("pinned_at")
+                })
 
             # -------------- REACT --------------
             elif msg_type == "react":
@@ -980,7 +1064,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 await run_in_threadpool(update_reactions_db, target_id, t["reactions"])
 
-                await connectionmanager.broadcast({"type":"react","id":target_id,"emoji":emoji_norm,"users": user_list})
+                await connectionmanager.broadcast_room(room_id, {
+                    "type":"react",
+                    "id":target_id,
+                    "emoji":emoji_norm,
+                    "users": user_list
+                })
 
             # -------------- REPLY PREVIEW --------------
             elif msg_type == "reply_preview_request":
@@ -991,7 +1080,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif msg_type == "typing":
                 is_typing = bool(data.get("is_typing"))
-                await connectionmanager.broadcast({
+                await connectionmanager.broadcast_room(room_id, {
                     "type": "typing",
                     "user": client_meta["username"],
                     "is_typing": is_typing
@@ -1002,6 +1091,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         connectionmanager.disconnect(websocket)
-        await connectionmanager.broadcast_presence_snapshot()
-        await connectionmanager.broadcast_presence_change(client_meta["username"], "offline")
-        await connectionmanager.broadcast({"type":"notice","text": f"User {client_meta['username']} left the chat"})
+
+        rid = client_meta.get("room_id")
+        if rid:
+            await connectionmanager.broadcast_presence_snapshot_room(rid)
+            await connectionmanager.broadcast_presence_change_room(rid, client_meta["username"], "offline")
+            await connectionmanager.broadcast_room(rid, {"type":"notice","text": f"User {client_meta['username']} left the chat"})
