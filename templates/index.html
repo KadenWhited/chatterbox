@@ -55,7 +55,7 @@
     .chat-wrapper {
       position: fixed;
       left: 0;
-      right: 0;
+      right: 260px;
       top: var(--header-height);
       bottom: calc(var(--composer-height) + 12px);
       padding: 12px;
@@ -223,6 +223,60 @@
       padding:8px;
     }
 
+    /* --- Voice indicators in Members list --- */
+    .member-badges {
+      display:flex;
+      align-items:center;
+      gap:6px;
+      flex: 0 0 auto;
+    }
+
+    .badge {
+      font-size:11px;
+      padding:2px 6px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,0.06);
+      color: var(--text);
+      background: rgba(255,255,255,0.02);
+      line-height: 1.4;
+      user-select:none;
+    }
+
+    .badge-voice {
+      border-color: rgba(79,159,255,0.25);
+      background: rgba(79,159,255,0.08);
+    }
+
+    .badge-muted {
+      border-color: rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
+      color: var(--muted);
+    }
+
+    .badge-speaking {
+      border-color: rgba(61,220,132,0.30);
+      background: rgba(61,220,132,0.12);
+      position: relative;
+    }
+
+    .badge-speaking::after {
+      content:"";
+      display:inline-block;
+      width:6px;
+      height:6px;
+      margin-left:6px;
+      border-radius:50%;
+      background: rgba(61,220,132,0.95);
+      box-shadow: 0 0 0 0 rgba(61,220,132,0.60);
+      animation: voicePulse 1.1s ease-out infinite;
+    }
+
+    @keyframes voicePulse {
+      0%   { box-shadow: 0 0 0 0 rgba(61,220,132,0.55); }
+      70%  { box-shadow: 0 0 0 10px rgba(61,220,132,0.00); }
+      100% { box-shadow: 0 0 0 0 rgba(61,220,132,0.00); }
+    }
+
     /* GIF picker layout & pinned header */
     #gifPicker {
       background: var(--panel);
@@ -286,7 +340,7 @@
     <input id="authPass" type="password" placeholder="password" />
     <button id="authRegister">Register</button>
     <button id="authLogin">Login</button>
-    <span id="authStatus" style="margin-left:8px;color:#666;"></span>
+    <span id="authStatus" style="margin-left:8px;color:#777;"></span>
   </div>
 
   <div id="chatUI" style="display:none;">
@@ -297,9 +351,22 @@
         <div id="headerUsername" class="header-username"></div>
       </div>
 
+      <div id="membersSidebar" style="
+        position:fixed; top:var(--header-height); right:0; bottom:0;
+        width:260px; background:var(--panel);
+        border-left:1px solid rgba(255,255,255,0.03);
+        padding:10px; overflow:auto; display:none; z-index:35;">
+        <div style="font-weight:700; margin-bottom:8px;">Members</div>
+        <div id="membersList" style="display:grid; gap:8px;"></div>
+      </div>
+
+
       <div class="header-right">
+        <button id="voiceBtn" class="btn-small">Voice</button>
+        <button id="muteBtn" class="btn-small" style="display:none;">Mute</button>
         <button id="viewPinsBtn" class="btn-small">Pins</button>
         <button id="roomsBtn" class="btn-small">Rooms</button>
+        <button id="inviteBtn" class="btn-small">Invite</button>
         <button id="settingsBtn" class="btn-small">Settings</button>
         <button id="connectBtn" class="btn-small">Connect</button>
         <button id="logoutBtn" class="btn-small">Logout</button>
@@ -383,6 +450,8 @@
 
     <!-- GIF picker (positioning unchanged) -->
     <div id="gifPicker" style="display:none; position:fixed;"></div>
+
+    <div id="voiceAudioSinks" style="display:none;"></div>
   </div>
 
 
@@ -405,11 +474,29 @@
   let nextCursor = null;
   let loadingOlder = false;
 
+  let micAudioCtx = null;
+  let micAnalyser = null;
+  let micData = null;
+  let micLoopHandle = null;
+
+  let lastSentSpeaking = null;
+  let lastSpeakingFlipAt = 0;
+
+
+  const voice = {
+    enabled: false,
+    muted: false,
+    localStream: null,
+    pcs: new Map(),          // username -> RTCPeerConnection
+    sinks: new Map(),        // username -> HTMLAudioElement
+    users: new Set(),        // usernames currently in voice (from server snapshot + join/leave)
+  };
+
   window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chat'});
   window.addEventListener('blur', () => { windowFocused = false; });
 
   async function fetchRoomMessagesPage(roomId, before=null, limit=50) {
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
     const qs = new URLSearchParams();
     if (before) qs.set('before', before);
     qs.set('limit', String(limit));
@@ -424,10 +511,9 @@
     return await res.json(); // {messages, has_more, next_cursor}
   }
 
-
   async function loadFavoriteMap() {
     favoriteMap = {};
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
     if (!token) return;
     try {
       const res = await fetch('/gif/favorites', { headers: { 'token': token }});
@@ -450,6 +536,12 @@
   }
 
   function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+  function getToken() {
+    const t = localStorage.getItem('access_token');
+    if (!t || t === 'null' || t === 'undefined' || t.length < 20) return null;
+    return t;
+  }
 
   function getBottomSafeY() {
     const composer = document.getElementById('composer');
@@ -475,8 +567,6 @@
       : 0;
     return Math.max(8, Math.round(headerH + 8));
   }
-
-
 
   function positionPanelUnderButton(panelEl, btnEl, preferredWidthEl=null) {
     if (!panelEl || !btnEl) return;
@@ -548,13 +638,130 @@
     wrapper.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
   }
 
+  function getVS(username) {
+    const cur = voiceState.get(username);
+    if (cur) return cur;
+    const init = { in_voice: false, muted: false, speaking: false };
+    voiceState.set(username, init);
+    return init;
+  }
+
+  function setVS(username, patch) {
+    const cur = getVS(username);
+    Object.assign(cur, patch);
+    voiceState.set(username, cur);
+  }
+
+  function sendVoiceState(patch) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "voice_state", ...patch }));
+  }
+
+  function startMicActivityMonitor() {
+    stopMicActivityMonitor();
+
+    if (!voice.enabled || !voice.localStream) return;
+
+    micAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = micAudioCtx.createMediaStreamSource(voice.localStream);
+
+    micAnalyser = micAudioCtx.createAnalyser();
+    micAnalyser.fftSize = 1024;
+    micAnalyser.smoothingTimeConstant = 0.8;
+
+    src.connect(micAnalyser);
+
+    micData = new Uint8Array(micAnalyser.fftSize);
+
+    const THRESHOLD = 0.030;         // tweak as needed
+    const MIN_FLIP_MS = 220;         // debounce flips
+    const SEND_INTERVAL_MS = 250;    // throttle outbound state
+
+    let lastSendAt = 0;
+
+    function tick() {
+      if (!micAnalyser || !micData) return;
+
+      // If muted, force speaking false
+      if (voice.muted) {
+        maybeSend(false);
+        micLoopHandle = requestAnimationFrame(tick);
+        return;
+      }
+
+      micAnalyser.getByteTimeDomainData(micData);
+
+      // Compute RMS in [0,1]
+      let sum = 0;
+      for (let i = 0; i < micData.length; i++) {
+        const v = (micData[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / micData.length);
+
+      const isSpeaking = rms >= THRESHOLD;
+      maybeSend(isSpeaking);
+
+      micLoopHandle = requestAnimationFrame(tick);
+    }
+
+    function maybeSend(isSpeaking) {
+      const now = Date.now();
+
+      // debounce flip
+      if (lastSentSpeaking !== null && isSpeaking !== lastSentSpeaking) {
+        if (now - lastSpeakingFlipAt < MIN_FLIP_MS) return;
+        lastSpeakingFlipAt = now;
+      }
+
+      // throttle outbound sends
+      if (now - lastSendAt < SEND_INTERVAL_MS) {
+        // Still update local UI immediately (optional), but do not spam server
+        setVS(myId, { speaking: isSpeaking });
+        renderMembersSidebar();
+        return;
+      }
+
+      if (lastSentSpeaking === null || isSpeaking !== lastSentSpeaking) {
+        lastSendAt = now;
+        lastSentSpeaking = isSpeaking;
+
+        // update local immediately
+        setVS(myId, { speaking: isSpeaking });
+        renderMembersSidebar();
+
+        // broadcast to room
+        sendVoiceState({ speaking: isSpeaking });
+      }
+    }
+
+    // mark initial state
+    lastSentSpeaking = null;
+    lastSpeakingFlipAt = 0;
+    tick();
+  }
+
+  function stopMicActivityMonitor() {
+    if (micLoopHandle) cancelAnimationFrame(micLoopHandle);
+    micLoopHandle = null;
+
+    try { micAnalyser?.disconnect(); } catch(e) {}
+    micAnalyser = null;
+    micData = null;
+
+    try { micAudioCtx?.close(); } catch(e) {}
+    micAudioCtx = null;
+
+    lastSentSpeaking = null;
+    lastSpeakingFlipAt = 0;
+  }
+
 
   function setPinsButtonState(isOpen) {
     const btn = document.getElementById('viewPinsBtn');
     if (!btn) return;
     btn.textContent = isOpen ? 'Hide Pins' : 'Pins';
   }
-
 
   function getGifProviderKeyFromResult(g) {
     return String(g.id || g.gif_id || g.url || '');
@@ -650,7 +857,7 @@
   }
 
   function ensureEndSpacer(container){
-    // ensure there is a spacer as last child so the composer doesn't cover last message
+
     if (!container) return;
     const last = container.lastElementChild;
     if (!last || !last.classList || !last.classList.contains('messages-end-spacer')) {
@@ -712,8 +919,6 @@
     });
   }
 
-
-
   function showMessageElement(el) {
     const container = document.getElementById('container');
     if (!container) {
@@ -735,6 +940,225 @@
     if (wasNearBottom) {
       setTimeout(() => scrollWrapperToBottom(wrapper), 8);
     }
+  }
+
+  function shouldInitiateOffer(me, other) {
+    // Deterministic rule prevents glare:
+    // only the lexicographically smaller username creates the offer.
+    return String(me) < String(other);
+  }
+
+  function getIceServers() {
+    // STUN is enough for local + many networks; TURN can be added later.
+    return [
+      { urls: "stun:stun.l.google.com:19302" }, {
+        urls: "",
+        username: "",
+        credential: ""
+      }
+    ];
+  }
+
+  function ensureAudioSink(username) {
+    const holder = document.getElementById("voiceAudioSinks");
+    holder.style.display = "block";
+
+    let el = voice.sinks.get(username);
+    if (el) return el;
+
+    el = document.createElement("audio");
+    el.autoplay = true;
+    el.playsInline = true;
+    el.dataset.user = username;
+    holder.appendChild(el);
+
+    voice.sinks.set(username, el);
+    return el;
+  }
+
+  function removeAudioSink(username) {
+    const el = voice.sinks.get(username);
+    if (el) {
+      try { el.remove(); } catch(e) {}
+      voice.sinks.delete(username);
+    }
+  }
+
+  function closePeer(username) {
+    const pc = voice.pcs.get(username);
+    if (pc) {
+      try { pc.onicecandidate = null; pc.ontrack = null; } catch(e) {}
+      try { pc.close(); } catch(e) {}
+      voice.pcs.delete(username);
+    }
+    removeAudioSink(username);
+  }
+
+  function sendVoiceSignal(to, data) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "voice_signal", to, data }));
+  }
+
+  async function ensurePeerConnection(peerUsername) {
+    if (voice.pcs.has(peerUsername)) return voice.pcs.get(peerUsername);
+
+    const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+
+    // Add our mic tracks
+    if (voice.localStream) {
+      voice.localStream.getTracks().forEach(t => pc.addTrack(t, voice.localStream));
+    }
+
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        sendVoiceSignal(peerUsername, { kind: "ice", candidate: ev.candidate });
+      }
+    };
+
+    pc.ontrack = (ev) => {
+      // Remote audio stream
+      const [stream] = ev.streams;
+      const sink = ensureAudioSink(peerUsername);
+      sink.srcObject = stream;
+    };
+
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === "failed" || st === "closed" || st === "disconnected") {
+        // do not aggressively tear down on transient "disconnected" if you want resilience;
+        // for MVP, tear down on failed/closed:
+        if (st === "failed" || st === "closed") {
+          closePeer(peerUsername);
+        }
+      }
+    };
+
+    voice.pcs.set(peerUsername, pc);
+    return pc;
+  }
+
+  async function createAndSendOffer(peerUsername) {
+    const pc = await ensurePeerConnection(peerUsername);
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    await pc.setLocalDescription(offer);
+    sendVoiceSignal(peerUsername, { kind: "offer", sdp: pc.localDescription });
+  }
+
+  async function handleIncomingOffer(from, sdp) {
+    const pc = await ensurePeerConnection(from);
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
+    // flush pending ICE
+    const arr = pendingIce.get(from) || [];
+    pendingIce.delete(from);
+    for (const c of arr) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {}
+    }
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendVoiceSignal(from, { kind: "answer", sdp: pc.localDescription });
+    }
+
+    async function handleIncomingAnswer(from, sdp) {
+      const pc = await ensurePeerConnection(from);
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    }
+
+    async function handleIncomingIce(from, candidate) {
+      const pc = await ensurePeerConnection(from);
+
+      if (!pc.remoteDescription) {
+        const arr = pendingIce.get(from) || [];
+        arr.push(candidate);
+        pendingIce.set(from, arr);
+        return;
+      }
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+
+  function updateVoiceButtons() {
+    const voiceBtn = document.getElementById("voiceBtn");
+    const muteBtn = document.getElementById("muteBtn");
+    if (!voiceBtn || !muteBtn) return;
+
+    voiceBtn.textContent = voice.enabled ? "Leave Voice" : "Voice";
+    muteBtn.style.display = voice.enabled ? "inline-block" : "none";
+    muteBtn.textContent = voice.muted ? "Unmute" : "Mute";
+  }
+
+  async function joinVoice() {
+    if (voice.enabled) return;
+
+    console.log("[voice] joinVoice called; secure=", window.isSecureContext);
+    // Requires secure context in production (HTTPS). localhost is usually okay.
+    voice.localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    console.log("[voice] got mic stream tracks:", voice.localStream.getTracks().map(t => t.kind));
+
+    voice.enabled = true;
+    voice.muted = false;
+    updateVoiceButtons();
+
+    // mark ourselves as in-voice locally and notify server of initial state
+    setVS(myId, { in_voice: true, muted: false, speaking: false });
+    sendVoiceState({ muted: false, speaking: false });
+
+    // start mic monitor
+    startMicActivityMonitor();
+    renderMembersSidebar();
+
+
+    // Tell server we are in voice; server will respond with voice_snapshot
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "voice_join" }));
+    }
+  }
+
+  function leaveVoice() {
+    if (!voice.enabled) return;
+
+    // inform room
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "voice_leave" }));
+    }
+
+    // close peers
+    Array.from(voice.pcs.keys()).forEach(u => closePeer(u));
+    voice.users.clear();
+
+    // stop mic
+    if (voice.localStream) {
+      voice.localStream.getTracks().forEach(t => { try { t.stop(); } catch(e) {} });
+      voice.localStream = null;
+    }
+
+    // stop speaking monitor and clear local UI state
+    stopMicActivityMonitor();
+    setVS(myId, { in_voice: false, muted: false, speaking: false });
+    sendVoiceState({ muted: false, speaking: false });
+    renderMembersSidebar();
+
+
+    voice.enabled = false;
+    voice.muted = false;
+    updateVoiceButtons();
+
+    const holder = document.getElementById("voiceAudioSinks");
+    if (holder) holder.style.display = "none";
+  }
+
+  function toggleMute() {
+    if (!voice.enabled || !voice.localStream) return;
+    voice.muted = !voice.muted;
+    voice.localStream.getAudioTracks().forEach(t => t.enabled = !voice.muted);
+    updateVoiceButtons();
+
+    // update local and broadcast
+    setVS(myId, { muted: voice.muted, speaking: false });
+    sendVoiceState({ muted: voice.muted, speaking: false });
+    renderMembersSidebar();
   }
 
   function renderMessage(msg, isLocalEcho=false, prevMsg=null) {
@@ -836,7 +1260,7 @@
     favBtn.style.marginLeft = '8px';
     favBtn.onclick = async (e) => {
       e.stopPropagation();
-      const token = localStorage.getItem('access_token');
+      const token = getToken();
       if (!token) { alert('Log in to favorite GIFs'); return; }
       if (favoriteMap[gifKey]) {
         const fid = favoriteMap[gifKey];
@@ -1032,8 +1456,44 @@
     return wrapper;
   }
 
+  let voiceUIWired = false;
+
+  function setupVoiceUI() {
+    if (voiceUIWired) return;
+    voiceUIWired = true;
+
+    const voiceBtn = document.getElementById("voiceBtn");
+    const muteBtn  = document.getElementById("muteBtn");
+    if (!voiceBtn || !muteBtn) return;
+
+    voiceBtn.addEventListener("click", async () => {
+      console.log("[voice] click; wsState=", socket?.readyState, "secure=", window.isSecureContext);
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("Not connected yet. Click Connect first (or wait for connection).");
+        return;
+      }
+
+      try {
+        if (!voice.enabled) await joinVoice();
+        else leaveVoice();
+      } catch (e) {
+        console.error("[voice] join/leave failed", e);
+        alert("Voice failed to start. Check mic permissions and HTTPS/localhost.");
+      }
+    });
+
+    muteBtn.addEventListener("click", () => toggleMute());
+  }
+
+
   const onlineUsers = new Set();
+
   const typingUsers = new Set();
+  const typingTimeouts = new Map(); // username -> timer
+
+  const pendingIce = new Map(); // peer -> [candidates]
+  const voiceState = new Map();
 
   function renderPresence() {
     const el = document.getElementById("presenceLine");
@@ -1047,12 +1507,72 @@
     if (!el) return;
     const arr = Array.from(typingUsers).sort();
     if (!arr.length) { el.textContent = ""; return; }
-    el.textContent = arr.length === 1 ? `${arr[0]} is typing…` : `${arr.join(", ")} are typing…`;
+
+    el.innerHTML = arr.map(u => `<div>#{u} is typing...</div>`).join('')
   }
+
+  function setUserTyping(user, isTyping) {
+    if (!user) return;
+
+    if (isTyping) {
+      typingUsers.add(user);
+      renderTyping();
+
+      if (typingTimeouts.has(user)) clearTimeout(typingTimeouts.get(user));
+      typingTimeouts.set(user, setTimeout(() => {
+        typingUsers.delete(user);
+        typingTimeouts.delete(user);
+        renderTyping();
+      }, 2500));
+    } else {
+      typingUsers.delete(user);
+      if (typingTimeouts.has(user)) clearTimeout(typingTimeouts.get(user));
+      typingTimeouts.delete(user);
+      renderTyping();
+    }
+  }
+
+  function getInviteCodeFromUrl() {
+    const u = new URL(window.location.href);
+    return u.searchParams.get('invite');
+  }
+
+  async function acceptInviteIfPresent() {
+    const code = getInviteCodeFromUrl() || localStorage.getItem('pending_invite');
+    if (!code) return null;
+
+    const token = getToken();
+    if (!token) {
+      localStorage.setItem('pending_invite', code);
+      return null;
+    }
+
+    const res = await fetch(`/invites/${encodeURIComponent(code)}/join`, {
+      method: 'POST',
+      headers: { token }
+    });
+    if (!res.ok) return null;
+
+    const j = await res.json();
+    if (j.room_id) {
+      localStorage.setItem('room_id', j.room_id);
+      localStorage.removeItem('pending_invite');
+
+      // clean URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      window.history.replaceState({}, '', url.toString());
+      return j.room_id;
+    }
+    return null;
+  }
+
 
   // on page load, try auto-login if token + username exist
   window.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('access_token');
+    setupVoiceUI();
+
+    const token = getToken();
     const user = localStorage.getItem('username');
 
     if (token && user) {
@@ -1120,9 +1640,18 @@
       if (file) {
         const fd = new FormData();
         fd.append('file', file);
-        const up = await fetch('/upload', { method: 'POST', body: fd });
+        const token = getToken();
+        if (!token) { alert('Log in to upload files'); return; }
+
+        const up = await fetch('/upload', {
+          method: 'POST',
+          headers: { token },
+          body: fd
+        });
+
         if (!up.ok) {
-          alert('File upload failed');
+          const j = await up.json().catch(()=>({}));
+          alert('File upload failed ' + (j.detail || up.status));
           return;
         }
         const upj = await up.json().catch(()=>({}));
@@ -1254,7 +1783,6 @@
 
 
 
-    // wire the buttons (same behavior as your existing handlers)
     const grid = document.getElementById('gifGrid');
     const searchInp = document.getElementById('gifSearchInput');
 
@@ -1279,7 +1807,7 @@
 
     document.getElementById('gifFavsBtn').onclick = async () => {
       grid.innerHTML = 'Loading favorites...';
-      const token = localStorage.getItem('access_token');
+      const token = getToken();
       if (!token) { grid.innerHTML = 'Log in to view favorites.'; return; }
       await ensureFavs();
       const res = await fetch('/gif/favorites', { headers: { 'token': token }});
@@ -1308,6 +1836,34 @@
     }));
   };
 
+  
+  document.getElementById('inviteBtn').onclick = async () => {
+    const roomId = localStorage.getItem('room_id');
+    const token = getToken();
+
+    if (!token) { alert('Log in first'); return; }
+    if (!roomId) { alert('No room selected'); return; }
+
+    const res = await fetch(`/rooms/${encodeURIComponent(roomId)}/invite`, {
+      method: 'POST',
+      headers: { token }
+    });
+
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(j.detail || `Invite failed (${res.status})`);
+      return;
+    }
+
+    const link = `${window.location.origin}${j.invite_path}`;
+
+    // Copy-to-clipboard best effort
+    try { await navigator.clipboard.writeText(link); } catch (e) {}
+
+    alert('Invite link copied:\n' + link);
+  };
+
+
   function getGifKeyFromResult(g) {
     return String(g.id || g.gif_id ||  g.gifId || g.url || '');
   }
@@ -1318,7 +1874,7 @@
 
   function renderGifGrid(results, grid){
     grid.innerHTML = '';
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
 
     results.forEach(g => {
       const url = g.url;
@@ -1633,39 +2189,35 @@ function resetChatUI(){
   typingUsers.clear();
   renderPresence();
   renderTyping();
-
 }
 
 
 
 // centralized connect function
 async function connectSocket() {
-  // if already connected, do nothing (or optionally re-open)
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    showAppUI();
-    document.getElementById('connectBtn').disabled = true;
-
-    const logoutBtn = document.getElementById('logoutBtn');
-    if (logout) logoutBtn.style.display = 'inline-block';
-
-    return;
-  }
-
-  const token = localStorage.getItem('access_token')
+  const token = getToken()
   const storedUsername = localStorage.getItem('username');
   myId = storedUsername || myId;
 
   console.log('[connectSocket] token?', !!token, 'myId:', myId);
   console.log('[connectSocket] page protocol:', window.location.protocol, 'host:', window.location.host);
 
-  // create WS and install handlers
-  if (!token || !myId) {
-    document.getElementById('status').textContent = 'Not logged in';
-    document.getElementById('chatUI').style.display = 'none';
-    document.getElementById('authBox').style.display = 'block';
-    console.warn('[connectSocket] missing token or username', { token: !!token, myId })
+  if (!token || !myId) { showAuthUI(); return}
+
+  const me = await fetchMe();
+  if (!me) { showAuthUI(); return;}
+
+  // if already connected, do nothing (or optionally re-open)
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    showAppUI();
+    document.getElementById('connectBtn').disabled = true;
+
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.style.display = 'inline-block';
+
     return;
   }
+
 
   document.getElementById('chatUI').style.display = 'block';
   document.getElementById('status').textContent = 'Connecting...'
@@ -1673,7 +2225,15 @@ async function connectSocket() {
   let roomId;
 
   try {
-    roomId = await ensureDefaultRoom();
+    const invitedRoom = await acceptInviteIfPresent();
+    if (invitedRoom) {
+      roomId = invitedRoom;
+    } else {
+      roomId = await ensureDefaultRoom();
+    }
+    roomMembers = await fetchRoomMembers(roomId);
+    renderMembersSidebar();
+
   } catch (e) {
     console.error('[connectSocket] ensureDefaultRoom failed', e);
     document.getElementById('status').textContent = 'Failed to load rooms. See console.';
@@ -1696,7 +2256,6 @@ async function connectSocket() {
 
   // hydrate header from /me so display_name + avatar_color apply immediately
   try {
-    const me = await fetchMe();
     if (me) {
       const shownName = me.display_name || me.username || myId;
       const headerUserEl = document.getElementById('headerUsername');
@@ -1741,6 +2300,13 @@ async function connectSocket() {
     // Disable connect
     document.getElementById('connectBtn').disabled = true;
 
+    // Voice UI
+    setupVoiceUI();
+    document.getElementById("voiceBtn").disabled = false;
+    document.getElementById("muteBtn").disabled = false;
+    updateVoiceButtons();
+
+
     attachInfiniteScroll();
   });
 
@@ -1750,6 +2316,7 @@ async function connectSocket() {
   });
 
   socket.addEventListener('close', (ev) => {
+    try { leaveVoice(); } catch(e) {}
     console.log('[WS] closed code=', ev.code, 'reason=', ev.reason, 'wasClean=', ev.wasClean);
     document.getElementById('status').textContent = `Disconnected (code ${ev.code})`;
 
@@ -1761,9 +2328,11 @@ async function connectSocket() {
     }
 
     if (ev.code === 1008) alert('Connection closed due to auth/policy (1008). Token may be invalid / expired.');
+    document.getElementById("voiceBtn").disabled = true;
+    document.getElementById("muteBtn").disabled = true;
   });
 
-  socket.addEventListener('message', (ev) => {
+  socket.addEventListener('message', async (ev) => {
     // server sends JSON payloads
     console.log('WS incoming payload:', ev.data);
 
@@ -1799,20 +2368,24 @@ async function connectSocket() {
       onlineUsers.clear();
       (payload.online || []).forEach(u => onlineUsers.add(u));
       renderPresence();
+      renderMembersSidebar();
       return;
     }
 
     if (payload.type === "presence") {
       if (payload.status === "online") onlineUsers.add(payload.user);
-      else onlineUsers.delete(payload.user);
+      else {
+        onlineUsers.delete(payload.user);
+        typingUsers.delete(payload.user);
+      }
       renderPresence();
+      renderTyping()
+      renderMembersSidebar();
       return;
     }
 
     if (payload.type === "typing") {
-      if (payload.is_typing) typingUsers.add(payload.user);
-      else typingUsers.delete(payload.user);
-      renderTyping();
+      setUserTyping(payload.user, !!payload.is_typing);
       return;
     }
 
@@ -1917,18 +2490,140 @@ async function connectSocket() {
       return;
     }
 
+    if (payload.type === "voice_snapshot") {
+        // reset in_voice for everyone in this room
+      // (keep muted/speaking as last known if you want; this resets in_voice accurately)
+      roomMembers.forEach(m => {
+        if (m.username) setVS(m.username, { in_voice: false });
+      });
+
+      voice.users.clear();
+      (payload.users || []).forEach(u => {
+        voice.users.add(u);
+        setVS(u, { in_voice: true });
+      });
+
+      // If server includes states (recommended below), hydrate them:
+      if (payload.states && typeof payload.states === 'object') {
+        Object.entries(payload.states).forEach(([u, st]) => {
+          if (!u || !st) return;
+          setVS(u, {
+            in_voice: true,
+            muted: !!st.muted,
+            speaking: !!st.speaking
+          });
+        });
+      }
+
+      renderMembersSidebar();
+
+      // existing connect logic:
+      if (voice.enabled) {
+        voice.users.forEach(async (u) => {
+          if (!u || u === myId) return;
+          if (shouldInitiateOffer(myId, u)) {
+            try { await createAndSendOffer(u); } catch(e) { console.warn("[voice] offer failed", u, e); }
+          } else {
+            await ensurePeerConnection(u);
+          }
+        });
+      }
+      return;
+    }
+
+    if (payload.type === "voice_join") {
+      const u = payload.user;
+      if (u) {
+        voice.users.add(u);
+        setVS(u, { in_voice: true, muted: false, speaking: false });
+      }
+      renderMembersSidebar();
+
+      if (voice.enabled && u && u !== myId) {
+        if (shouldInitiateOffer(myId, u)) {
+          try { await createAndSendOffer(u); } catch(e) { console.warn("[voice] offer failed", u, e); }
+        } else {
+          await ensurePeerConnection(u);
+        }
+      }
+      return;
+    }
+
+    if (payload.type === "voice_leave") {
+      const u = payload.user;
+      if (u) {
+        voice.users.delete(u);
+        setVS(u, { in_voice: false, muted: false, speaking: false });
+        closePeer(u);
+      }
+      renderMembersSidebar();
+      return;
+    }
+
+    if (payload.type === "voice_signal") {
+      const from = payload.from;
+      const data = payload.data || {};
+      if (!voice.enabled) {
+        // If you want “auto-answer” even when not joined, remove this guard.
+        return;
+      }
+      if (!from || from === myId) return;
+
+      try {
+        if (data.kind === "offer") await handleIncomingOffer(from, data.sdp);
+        else if (data.kind === "answer") await handleIncomingAnswer(from, data.sdp);
+        else if (data.kind === "ice") await handleIncomingIce(from, data.candidate);
+      } catch (e) {
+        console.warn("[voice] signal handling failed", from, data.kind, e);
+      }
+      return;
+    }
+
+    if (payload.type === "voice_state") {
+      const u = payload.user;
+      if (!u) return;
+
+      // speaking is ephemeral; optionally auto-expire after ~1s
+      const patch = {};
+      if (typeof payload.muted === 'boolean') patch.muted = payload.muted;
+      if (typeof payload.speaking === 'boolean') patch.speaking = payload.speaking;
+
+      setVS(u, patch);
+      renderMembersSidebar();
+
+      // optional: auto-expire speaking to avoid “stuck speaking” if packets drop
+      if (patch.speaking) {
+        const expected = Date.now();
+        setTimeout(() => {
+          const cur = getVS(u);
+          // only clear if still speaking (no later update happened)
+          if (cur.speaking) {
+            setVS(u, { speaking: false });
+            renderMembersSidebar();
+          }
+        }, 1200);
+      }
+
+      return;
+    }
   });
 }
 
   async function fetchMe() {
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
+    if (!token) {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('username');
+      showAuthUI();
+      throw new Error('Missing/invalid token; please log in again.');
+    }
     const res = await fetch('/me', { headers: { token } });
     if (!res.ok) return null;
     return await res.json();
   }
 
   async function saveMe(patch) {
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
     const res = await fetch('/me', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', token },
@@ -1947,12 +2642,100 @@ async function connectSocket() {
   }
 
   async function fetchRooms() {
-    const token = localStorage.getItem('access_token');
-    const res = await fetch('/rooms', { headers: { token }});
-    if (!res.ok) throw new Error('rooms fetch failed');
+    const token = getToken();
+    const res = await fetch('/rooms', { headers: { token } });
+    const j = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      // token invalid/stale — hard reset client auth state
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('username');
+      localStorage.removeItem('room_id');
+      showAuthUI();
+      throw new Error(j.detail || 'invalid token');
+    }
+
+    if (!res.ok) throw new Error(j.detail || `rooms fetch failed (${res.status})`);
+    return j.results || [];
+  }
+
+  async function fetchRoomMembers(roomId) {
+    const token = getToken();
+    const res = await fetch(`/rooms/${encodeURIComponent(roomId)}/members`, { headers: { token }});
+    if (!res.ok) return [];
     const j = await res.json();
     return j.results || [];
   }
+
+  function renderMembersSidebar() {
+    const sb = document.getElementById('membersSidebar');
+    const list = document.getElementById('membersList');
+    if (!sb || !list) return;
+
+    sb.style.display = 'block';
+    list.innerHTML = '';
+
+    const membersSorted = roomMembers.slice().sort((a,b) => (a.username||'').localeCompare(b.username||''));
+
+    membersSorted.forEach(m => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+
+      const dot = document.createElement('div');
+      dot.style.width = '10px';
+      dot.style.height = '10px';
+      dot.style.borderRadius = '50%';
+      dot.style.background = onlineUsers.has(m.username) ? '#3ddc84' : 'rgba(255,255,255,0.15)';
+
+      const name = document.createElement('div');
+      name.style.flex = '1';
+      name.style.minWidth = '0';
+      name.style.overflow = 'hidden';
+      name.style.textOverflow = 'ellipsis';
+      name.style.whiteSpace = 'nowrap';
+      name.textContent = m.display_name || m.username;
+
+      row.appendChild(dot);
+      row.appendChild(name);
+
+      // --- voice badges ---
+      const badges = document.createElement('div');
+      badges.className = 'member-badges';
+
+      const vs = getVS(m.username);
+
+      // in-voice badge (server-driven via snapshot/join/leave)
+      if (vs.in_voice) {
+        const b = document.createElement('span');
+        b.className = 'badge badge-voice';
+        b.textContent = 'Voice';
+        badges.appendChild(b);
+      }
+
+      // muted badge
+      if (vs.in_voice && vs.muted) {
+        const b = document.createElement('span');
+        b.className = 'badge badge-muted';
+        b.textContent = 'Muted';
+        badges.appendChild(b);
+      }
+
+      // speaking badge (only if in voice and not muted)
+      if (vs.in_voice && !vs.muted && vs.speaking) {
+        const b = document.createElement('span');
+        b.className = 'badge badge-speaking';
+        b.textContent = 'Speaking';
+        badges.appendChild(b);
+      }
+
+      row.appendChild(badges);
+      list.appendChild(row);
+    });
+  }
+
+
 
   async function ensureDefaultRoom() {
     let rid = localStorage.getItem('room_id');
@@ -1973,7 +2756,7 @@ async function connectSocket() {
     if (!general && rooms.length) general = rooms[0];
 
     if (!general) {
-      const token = localStorage.getItem('access_token');
+      const token = getToken();
       const cr = await fetch('/rooms', {
         method: 'POST',
         headers: { 'Content-Type':'application/json', token },
@@ -2001,6 +2784,9 @@ async function connectSocket() {
 
     // reconnect
     await connectSocket();
+
+    roomMembers = await fetchRoomMembers(newRoomId);
+    renderMembersSidebar();
   }
 
   function minuteKey(isoTs) {
@@ -2097,7 +2883,7 @@ async function connectSocket() {
     const name = (document.getElementById('newRoomName').value || '').trim();
     if (!name) return;
 
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
     const res = await fetch('/rooms', {
       method: 'POST',
       headers: { 'Content-Type':'application/json', token },
@@ -2274,23 +3060,37 @@ async function connectSocket() {
     const file = e.target.files[0];
     if (!file || !socket) return;
 
+    const token = getToken();
+    if (!token) { alert('Log in to upload files'); return; }
+
     const formData = new FormData();
     formData.append("file", file);
 
     const res = await fetch("/upload", {
       method: "POST",
+      headers: { token },
       body: formData
     });
 
+    if (!res.ok) {
+      const j = await res.json().catch(()=>({}));
+      alert('Upload failed: ' + (j.detail || res.status));
+      return;
+    }
+
     const data = await res.json();
+
     socket.send(JSON.stringify({
       type: "message",
       content: data.url
     }));
+
+    e.target.value = '';
   };
 
 document.getElementById('logoutBtn').onclick = () => {
   if (socket) {
+    try { leaveVoice(); } catch(e){}
     try { socket.close(); } catch(e){}
     socket = null;
   }

@@ -29,6 +29,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi import Response
 import hashlib
+import ipaddress
+import socket
+from urllib.parse import urlparse
+import secrets
 #----------------------------------------------------------------------------------------------
 
 
@@ -44,13 +48,13 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
 
-#app.add_middleware(TrustedHostMiddleware, allowed_hosts=["https://chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
+#app.add_middleware(TrustedHostMiddleware, allowed_hosts=["chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
 
 def get_db():
     db = SessionLocal()
@@ -67,6 +71,12 @@ EMOJI_ALIASES = {}
 MAX_PINNED = 100
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
+
+def require_admin_token(x_admin_token: str | None = Header(None)):
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="forbidden")
 
 
 def load_emojis():
@@ -113,6 +123,10 @@ class ConnectionManager:
         self.messages_index: Dict[str, Dict[str, Any]] = {}
 
         self.MAX_CACHE_MESSAGES = 1000
+
+        self.voice_members: Dict[str, set[str]] = {}
+        self.voice_states: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # shape: room_id -> username -> {"muted": bool, "speaking": bool, "ts": iso}
 
     async def connect(self, websocket: WebSocket, client_meta: Dict[str, Any]):
         self.active_connections[websocket] = client_meta
@@ -250,6 +264,49 @@ class ConnectionManager:
         finally:
             db.close()
 
+    def voice_members_in_room(self, room_id: str):
+        return sorted(self.voice_members.get(room_id, set()))
+    
+    def add_voice_member(self, room_id: str, username: str):
+        s = self.voice_members.setdefault(room_id, set())
+        s.add(username)
+
+    def remove_voice_member(self, room_id: str, username: str):
+        s = self.voice_members.get(room_id)
+        if not s:
+            return
+        s.discard(username)
+        if not s:
+            self.voice_members.pop(room_id, None)
+
+    def find_ws_by_username(self, room_id: str, username: str) -> Optional[WebSocket]:
+        for ws, meta in self.active_connections.items():
+            if meta.get("room_id") == room_id and meta.get("username") == username:
+                return ws
+        return None
+    
+    def set_voice_state(self, room_id: str, username: str, *, muted: Optional[bool]=None, speaking: Optional[bool]=None):
+        room = self.voice_states.setdefault(room_id, {})
+        st = room.setdefault(username, {"muted": False, "speaking": False, "ts": None})
+        if muted is not None:
+            st["muted"] = bool(muted)
+        if speaking is not None:
+            st["speaking"] = bool(speaking)
+        st["ts"] = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def clear_voice_state(self, room_id: str, username: str):
+        room = self.voice_states.get(room_id)
+        if not room:
+            return
+        room.pop(username, None)
+        if not room:
+            self.voice_states.pop(room_id, None)
+
+    def voice_states_in_room(self, room_id: str):
+        # return a plain dict safe for json
+        return self.voice_states.get(room_id, {})
+
+
     
 def query_giphy_search(q: str, limit: int = 20, offset: int = 0):
     if not GIPHY_KEY:
@@ -323,10 +380,36 @@ def get_user_from_token_sync(token: str):
     finally:
         db.close()
 
-async def get_current_user(token: str = Header(None)):
-    if not token:
+def sniff_image_type(first_bytes: bytes) -> str | None:
+    if first_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if first_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if first_bytes.startswith(b"GIF87a") or first_bytes.startswith(b"GIF89a"):
+        return "image/gif"
+    if first_bytes.startswith(b"RIFF") and b"WEBP" in first_bytes[8:16]:
+        return "image/webp"
+    return None
+
+def _extract_bearer(auth: str | None) -> str | None:
+    if not auth:
+        return None
+    parts = auth.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1]
+    return None
+
+def make_invite_code() -> str:
+    return secrets.token_urlsafe(16)
+
+async def get_current_user(
+        authorization: str | None = Header(None),
+        token: str | None = Header(None),
+):
+    raw = _extract_bearer(authorization) or token
+    if not raw:
         raise HTTPException(status_code=401, detail="missing token")
-    user = await run_in_threadpool(get_user_from_token_sync, token)
+    user = await run_in_threadpool(get_user_from_token_sync, raw)
     if not user:
         raise HTTPException(status_code=401, detail="invalid token")
     return user
@@ -365,7 +448,11 @@ async def add_security_headers(request, call_next):
     return resp
 
 @app.post("/admin/emojis/reload")
-def reload_emojis(background: BackgroundTasks):
+def reload_emojis(
+    background: BackgroundTasks, 
+    current_user=Depends(get_current_user),
+    _=Depends(require_admin_token),
+):
     try:
         load_emojis()
         return {"ok": True, "loaded": len(EMOJI_LIST)}
@@ -556,15 +643,111 @@ async def load_room_messages(
         "next_cursor": next_cursor
     }
 
+@app.get("/rooms/{room_id}/members")
+async def room_members(room_id: str, current_user=Depends(get_current_user)):
+    def _list():
+        db = SessionLocal()
+        try:
+            # verify membership
+            m = db.query(RoomMember).filter(
+                RoomMember.room_id == room_id,
+                RoomMember.user_id == current_user["id"]
+            ).first()
+            if not m:
+                raise HTTPException(status_code=403, detail="not_in_room")
+
+            rows = (
+                db.query(User.username, User.display_name, User.avatar_color, User.status)
+                  .join(RoomMember, RoomMember.user_id == User.id)
+                  .filter(RoomMember.room_id == room_id)
+                  .order_by(User.username.asc())
+                  .all()
+            )
+            return [{
+                "username": u,
+                "display_name": dn,
+                "avatar_color": ac,
+                "status": st
+            } for (u, dn, ac, st) in rows]
+        finally:
+            db.close()
+
+    return {"results": await run_in_threadpool(_list)}
+
+@app.post("/rooms/{room_id}/invite")
+async def create_room_invite(room_id: str, current_user=Depends(get_current_user)):
+    def _make():
+        db = SessionLocal()
+        try:
+            # verify membership
+            m = db.query(RoomMember).filter(
+                RoomMember.room_id == room_id,
+                RoomMember.user_id == current_user["id"]
+            ).first()
+            if not m:
+                raise HTTPException(status_code=403, detail="not_in_room")
+
+            r = db.query(Room).filter(Room.id == room_id).first()
+            if not r:
+                raise HTTPException(status_code=404, detail="room_not_found")
+
+            if not r.invite_code:
+                r.invite_code = make_invite_code()
+                db.commit()
+
+            return {"invite_code": r.invite_code}
+        finally:
+            db.close()
+
+    out = await run_in_threadpool(_make)
+    # client can build absolute URL; returning relative keeps it environment-agnostic
+    return {"invite_code": out["invite_code"], "invite_path": f"/?invite={out['invite_code']}"}
+
+@app.post("/invites/{code}/join")
+async def join_by_invite(code: str, current_user=Depends(get_current_user)):
+    code = (code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="invalid_code")
+
+    def _join():
+        db = SessionLocal()
+        try:
+            r = db.query(Room).filter(Room.invite_code == code).first()
+            if not r:
+                raise HTTPException(status_code=404, detail="invite_not_found")
+
+            existing = db.query(RoomMember).filter(
+                RoomMember.room_id == r.id,
+                RoomMember.user_id == current_user["id"]
+            ).first()
+            if existing:
+                return {"room_id": r.id, "joined": False}
+
+            db.add(RoomMember(room_id=r.id, user_id=current_user["id"], role="member"))
+            db.commit()
+            return {"room_id": r.id, "joined": True}
+        finally:
+            db.close()
+
+    return await run_in_threadpool(_join)
+
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    if file.content_type not in ALLOWED_UPLOAD_TYPES:
+async def upload_file(
+    file: UploadFile = File(...), 
+    current_user=Depends(get_current_user),
+):
+    chunk0 = await file.read(1024)
+    real_type = sniff_image_type(chunk0)
+    
+    if real_type not in ALLOWED_UPLOAD_TYPES:
         raise HTTPException(status_code=415, detail="Unsupported file type")
     
     filename = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}"
     dest = UPLOAD_DIR / filename
     total = 0
     async with aiofiles.open(dest, "wb") as out_file:
+        await out_file.write(chunk0)
+        total = len(chunk0)
         while True:
             chunk = await file.read(1024 * 64)
             if not chunk:
@@ -577,22 +760,64 @@ async def upload_file(file: UploadFile = File(...)):
                 except Exception: pass
                 raise HTTPException(status_code=413, detail="File too large")
             await out_file.write(chunk)
-    return {"url": f"/static/uploads/{filename}", "filename": filename}
+    return {"url": f"/uploads/{filename}", "filename": filename}
+
+def is_public_host(hostname: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+        for fam, _, _, _, sockaddr in infos:
+            ip = sockaddr[0]
+            ip_obj = ipaddress.ip_address(ip)
+            if (
+                ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
+                or ip_obj.is_multicast or ip_obj.is_reserved
+            ):
+                return False
+        return True
+    except Exception:
+        return False
 
 @app.post("/preview")
 def link_preview(url: str):
-    r = requests.get(url, timeout=3)
-    soup = BeautifulSoup(r.text, "html.parser")
+
+    u = urlparse(url)
+    if u.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="invalid_url_scheme")
+    if not u.hostname or not is_public_host(u.hostname):
+        raise HTTPException(status_code=400, detail="blocked_host")
+
+    try:
+        r = requests.get(
+            url,
+            timeout=(3.05, 5),
+            allow_redirects=False,
+            headers={"User-Agent": "ChatterboxPreview/1.0"},
+            stream=True,
+        )
+    except requests.RequestException:
+        raise HTTPException(status_code=400, detail="preview_fetch_failed")
+
+    # cap bytes
+    max_bytes = 250_000
+    data = b""
+    for chunk in r.iter_content(16_384):
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > max_bytes:
+            break
+
+    soup = BeautifulSoup(data, "html.parser")
 
     def meta(prop):
         tag = soup.find("meta", property=prop)
-        return tag["content"] if tag else None
-    
+        return tag["content"] if tag and tag.get("content") else None
+
     return {
         "title": meta("og:title"),
         "description": meta("og:description"),
         "image": meta("og:image"),
-        "url": url
+        "url": url,
     }
 
 @app.get("/me", response_model=ProfileOut)
@@ -837,8 +1062,6 @@ def read_index(request: Request):
 # username = string to track names
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-
     token = websocket.query_params.get("token")
     room_id = websocket.query_params.get("room_id")
 
@@ -868,6 +1091,10 @@ async def websocket_endpoint(websocket: WebSocket):
         print("[ws] closing websocket: token invalid/expired")
         await websocket.close(code=1008)
         return
+    
+    await websocket.accept()
+
+  
 
     # fetch user in threadpool (session created inside)
     def get_user_by_id(uid):
@@ -1270,6 +1497,107 @@ async def websocket_endpoint(websocket: WebSocket):
                     "is_typing": is_typing
                 }, exclude=websocket)
 
+            # -------------- VOICE: JOIN --------------
+            elif msg_type == "voice_join":
+                username = client_meta["username"]
+
+                # add + send snapshot to this user (so client knows who to connect to)
+                connectionmanager.add_voice_member(room_id, username)
+
+                # initialize state for joiner
+                connectionmanager.set_voice_state(room_id, username, muted=False, speaking=False)
+
+                await connectionmanager.send_personal_message({
+                    "type": "voice_snapshot",
+                    "users": connectionmanager.voice_members_in_room(room_id),
+                    "states": connectionmanager.voice_states_in_room(room_id),
+                }, websocket)
+
+
+                # notify room others
+                await connectionmanager.broadcast_room(room_id, {
+                    "type": "voice_join",
+                    "user": username,
+                }, exclude=websocket)
+
+            # -------------- VOICE: LEAVE --------------
+            elif msg_type == "voice_leave":
+                username = client_meta["username"]
+                connectionmanager.remove_voice_member(room_id, username)
+                connectionmanager.clear_voice_state(room_id, username)
+
+                await connectionmanager.broadcast_room(room_id, {
+                    "type": "voice_leave",
+                    "user": username,
+                }, exclude=websocket)
+
+            # -------------- VOICE: SIGNAL RELAY --------------
+            elif msg_type == "voice_signal":
+                """
+                payload: {
+                  type: "voice_signal",
+                  to: "<username>",
+                  data: { kind: "offer"|"answer"|"ice", sdp?:..., candidate?:... }
+                }
+                """
+                to_user = (data.get("to") or "").strip()
+                sig = data.get("data")
+
+                if not to_user or not isinstance(sig, dict):
+                    await connectionmanager.send_personal_message({
+                        "type": "error",
+                        "error": "invalid_voice_signal",
+                    }, websocket)
+                    continue
+
+                target_ws = connectionmanager.find_ws_by_username(room_id, to_user)
+                if not target_ws:
+                    await connectionmanager.send_personal_message({
+                        "type": "error",
+                        "error": "voice_target_offline",
+                        "to": to_user,
+                    }, websocket)
+                    continue
+
+                # Relay to target
+                await connectionmanager.send_personal_message({
+                    "type": "voice_signal",
+                    "from": client_meta["username"],
+                    "data": sig,
+                }, target_ws)
+
+            elif msg_type == "voice_state":
+                username = client_meta["username"]
+
+                # Only accept state updates from users currently in voice
+                if username not in connectionmanager.voice_members.get(room_id, set()):
+                    # ignore quietly or return an error
+                    continue
+
+                muted = data.get("muted", None)
+                speaking = data.get("speaking", None)
+
+                # Normalize to bool if present
+                if muted is not None:
+                    muted = bool(muted)
+                    # If muted, speaking should be false
+                    if muted:
+                        speaking = False
+
+                if speaking is not None:
+                    speaking = bool(speaking)
+
+                connectionmanager.set_voice_state(room_id, username, muted=muted, speaking=speaking)
+
+                await connectionmanager.broadcast_room(room_id, {
+                    "type": "voice_state",
+                    "user": username,
+                    "muted": muted if muted is not None else None,
+                    "speaking": speaking if speaking is not None else None,
+                }, exclude=None)
+
+
+
             else:
                 await connectionmanager.send_personal_message({"type":"error","error":"unknown_type","got": msg_type}, websocket)
 
@@ -1279,18 +1607,19 @@ async def websocket_endpoint(websocket: WebSocket):
         print("[ws] unexpected error:", repr(e))
     finally:
         meta = connectionmanager.disconnect(websocket)
-
-        # If we had a known user+room, broadcast offline + updated snapshot + notice
         if meta:
             rid = meta.get("room_id")
             username = meta.get("username")
+
+            # remove from voice + tell others
             if rid and username:
-                try:
-                    await connectionmanager.broadcast_presence_change_room(rid, username, "offline")
-                    await connectionmanager.broadcast_presence_snapshot_room(rid)
-                    await connectionmanager.broadcast_room(
-                        rid,
-                        {"type": "notice", "text": f"User {username} left the chat"}
-                    )
-                except Exception as e:
-                    print("[ws] failed to broadcast disconnect events:", repr(e))
+                if username in connectionmanager.voice_members.get(rid, set()):
+                    connectionmanager.remove_voice_member(rid, username)
+                    connectionmanager.clear_voice_state(rid, username)
+                    try:
+                        await connectionmanager.broadcast_room(rid, {
+                            "type": "voice_leave",
+                            "user": username,
+                        })
+                    except Exception as e:
+                        print("[ws] failed to broadcast voice_leave:", repr(e))

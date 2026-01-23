@@ -30,6 +30,8 @@ class Room(Base):
     name = Column(String(80), unique=True, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
 
+    invite_code = Column(String(64), unique=True, nullable=True, index=True)   
+
     messages = relationship("Message", back_populates="room")
 
 class Message(Base):
