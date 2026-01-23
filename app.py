@@ -379,7 +379,7 @@ def register(payload: RegisterRequest, db=Depends(get_db)):
         password = payload.password
         if not username or not password:
             raise HTTPException(status_code=400, detail="username and password are required")
-        if len(password) < 6:
+        if len(password) < 8:
             raise HTTPException(status_code=400, detail="password too short")
         
         existing = db.query(User).filter(User.username == username).first()

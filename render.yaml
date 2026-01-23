@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: chatterbox
+    env: python
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python create_db.py
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GIPHY_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
