@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect, UploadFile, File, Header
+from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect, UploadFile, File, Header, Query
 import json
 import uuid
 import datetime as _dt
@@ -15,7 +15,7 @@ from cachetools import TTLCache
 
 #Authentication/Database
 from database import SessionLocal
-from models import User, Message, Favorite, Room
+from models import User, Message, Favorite, Room, RoomMember
 from auth_utils import hash_password, verify_password, create_access_token, decode_access_token
 from starlette.status import HTTP_401_UNAUTHORIZED
 from pydantic import BaseModel
@@ -95,33 +95,40 @@ load_emojis()
 templates = Jinja2Templates(directory="templates")
 
 
-UPLOAD_DIR = pathlib.Path("static/uploads")
+UPLOAD_DIR = pathlib.Path(os.environ.get("UPLOAD_DIR", "/var/data/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 GIPHY_KEY = os.environ.get("GIPHY_API_KEY")
 gif_search_cache = TTLCache(maxsize= 256, ttl= 60)
 
 class ConnectionManager:
     def __init__(self):
-        # websocket -> metadata dict {"username": "123"}
+        # websocket -> metadata dict {"user_id": int, "username": str, "room_id": str}
         self.active_connections: Dict[WebSocket, Dict[str, Any]] = {}
-        self.messages = []  # stores logs
+
+        # recent message cache (global, capped)
+        self.messages: list[Dict[str, Any]] = []
+        self.messages_index: Dict[str, Dict[str, Any]] = {}
+
+        self.MAX_CACHE_MESSAGES = 1000
 
     async def connect(self, websocket: WebSocket, client_meta: Dict[str, Any]):
-        print("DEBUG connect():", type(websocket), type(client_meta))
         self.active_connections[websocket] = client_meta
         print(f"[connect] {client_meta}")
 
     def disconnect(self, websocket: WebSocket):
         meta = self.active_connections.pop(websocket, None)
         print(f"[disconnect] {meta}")
+        return meta
 
     def usernames_online_in_room(self, room_id: str):
         return sorted({
             meta.get("username")
-            for meta in self.active_connections.values() 
+            for meta in self.active_connections.values()
             if meta.get("username") and meta.get("room_id") == room_id
-            })
+        })
 
     async def send_personal_message(self, payload: Dict[str, Any], websocket: WebSocket):
         try:
@@ -130,90 +137,119 @@ class ConnectionManager:
             print("[send_personal_message] failed to send to", self.active_connections.get(websocket), "error:", repr(e))
             raise
 
-    async def broadcast_room(self, room_id: str, payload: Dict[str, Any], exclude: WebSocket=None):
+    async def broadcast_room(self, room_id: str, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
         dead = []
+
         for ws, meta in list(self.active_connections.items()):
             if meta.get("room_id") != room_id:
                 continue
-            if exclude and ws == exclude:
+            if exclude is not None and ws == exclude:
                 continue
             try:
                 await ws.send_text(text)
             except Exception:
                 dead.append(ws)
+
         for ws in dead:
             self.disconnect(ws)
 
     async def broadcast(self, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
         dead = []
-        # remove broken sockets
-        for conn in self.active_connections.keys():
-            if conn == exclude:
+
+        for ws, meta in list(self.active_connections.items()):
+            if exclude is not None and ws == exclude:
                 continue
             try:
-                await conn.send_text(text)
+                await ws.send_text(text)
             except Exception as e:
-                print(f"[broadcast] removing broken socket {self.active_connections.get(conn)}: {e}")
-                dead.append(conn)
+                print(f"[broadcast] removing broken socket {meta}: {e}")
+                dead.append(ws)
 
-        for conn in dead:
-            self.disconnect(conn)
+        for ws in dead:
+            self.disconnect(ws)
 
     async def broadcast_presence_snapshot_room(self, room_id: str):
         await self.broadcast_room(room_id, {
             "type": "presence_snapshot",
-            "online": self.usernames_online_in_room(room_id)
+            "online": self.usernames_online_in_room(room_id),
         })
 
     async def broadcast_presence_change_room(self, room_id: str, username: str, status: str):
         await self.broadcast_room(room_id, {
             "type": "presence",
             "user": username,
-            "status": status
+            "status": status,
         })
 
     def store_message(self, msg: Dict[str, Any]):
+        """
+        Store/update in cache. Capped FIFO.
+        """
+        mid = msg.get("id")
+        if not mid:
+            return
+
+        # overwrite index for same id (edits/pins/reactions can update the dict)
+        self.messages_index[mid] = msg
         self.messages.append(msg)
-        N = 1000
-        if len(self.messages) > N:
-            self.messages.pop(0)
+
+        # cap
+        if len(self.messages) > self.MAX_CACHE_MESSAGES:
+            old = self.messages.pop(0)
+            oid = old.get("id")
+            if oid:
+                # only remove if index still points to this exact object (avoids removing newer updates)
+                if self.messages_index.get(oid) is old:
+                    self.messages_index.pop(oid, None)
+
+    def cache_message_if_absent(self, msg: Dict[str, Any]):
+        mid = msg.get("id")
+        if not mid:
+            return
+        if mid not in self.messages_index:
+            self.store_message(msg)
 
     def find_message(self, message_id: str):
-        # check in-memory first
-        for m in self.messages:
-            if m["id"] == message_id:
-                return m
+        """
+        In-memory first; DB fallback if not found.
+        """
+        if not message_id:
+            return None
+
+        m = self.messages_index.get(message_id)
+        if m:
+            return m
 
         # fallback to DB: try to load and materialize into same dict shape
+        db = SessionLocal()
         try:
-            db = SessionLocal()
             row = db.query(Message).filter(Message.id == message_id).first()
             if not row:
                 return None
+
             msg = {
                 "type": "message",
                 "id": row.id,
                 "author": row.author_username,
                 "author_id": row.author_id,
-                "timestamp": row.timestamp.isoformat().replace("+00:00","Z"),
+                "timestamp": row.timestamp.isoformat().replace("+00:00", "Z"),
                 "content": row.content,
                 "reply_to": row.reply_to,
                 "deleted": row.deleted,
                 "pinned": row.pinned,
                 "pinned_by": row.pinned_by,
-                "pinned_at": row.pinned_at.isoformat().replace("+00:00","Z") if row.pinned_at else None,
-                "reactions": row.reactions or {}
+                "pinned_at": row.pinned_at.isoformat().replace("+00:00", "Z") if row.pinned_at else None,
+                "edited_at": row.edited_at.isoformat().replace("+00:00", "Z") if row.edited_at else None,
+                "reactions": row.reactions or {},
+                "room_id": row.room_id,
             }
-            # keep in memory to prevent repeated DB hits
             self.store_message(msg)
             return msg
         finally:
-            try:
-                db.close()
-            except Exception:
-                pass
+            db.close()
+
     
 def query_giphy_search(q: str, limit: int = 20, offset: int = 0):
     if not GIPHY_KEY:
@@ -312,6 +348,7 @@ class ProfileOut(BaseModel):
     status: Optional[str] = None
     bio: Optional[str] = None
     avatar: Optional[str] = None
+    avatar_color: Optional[str] = None
 
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = None
@@ -396,10 +433,19 @@ async def create_room(payload: RoomCreate, current_user=Depends(get_current_user
         try:
             existing = db.query(Room).filter(Room.name == name).first()
             if existing:
+                m = db.query(RoomMember).filter(
+                    RoomMember.room_id == existing.id,
+                    RoomMember.user_id == current_user["id"]
+                ).first()
+                if not m:
+                    db.add(RoomMember(room_id=existing.id, user_id=current_user["id"], role="member"))
+                    db.commit()
                 return {"id": existing.id, "name": existing.name, "created": False}
             
             r = Room(name=name)
             db.add(r)
+            db.flush()
+            db.add(RoomMember(room_id=r.id, user_id=current_user["id"], role="owner"))
             db.commit()
             db.refresh(r)
             return {"id": r.id, "name": r.name, "created": True}
@@ -407,6 +453,108 @@ async def create_room(payload: RoomCreate, current_user=Depends(get_current_user
             db.close()
 
     return await run_in_threadpool(_create)
+
+@app.post("/rooms/{room_id}/join")
+async def join_room(room_id: str, current_user=Depends(get_current_user)):
+    def _join():
+        db = SessionLocal()
+        try:
+            r = db.query(Room).filter(Room.id == room_id).first()
+            if not r:
+                raise HTTPException(404, "room_not_found")
+            
+            existing = db.query(RoomMember).filter(
+                RoomMember.room_id == room_id,
+                RoomMember.user_id == current_user["id"]
+            ).first()
+            if existing:
+                return {"ok": True, "joined": False}
+            
+            db.add(RoomMember(room_id=room_id, user_id=current_user["id"]))
+            db.commit()
+            return {"ok": True, "joined": True}
+        finally:
+            db.close()
+    return await run_in_threadpool(_join)
+
+@app.get("/rooms/{room_id}/messages")
+async def load_room_messages(
+    room_id: str,
+    before: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+    current_user = Depends(get_current_user),
+):
+    """
+    Cursor-based pagination for infinite scroll.
+    Returns messages ordered newest -> oldest.
+    """
+
+    def _load():
+        db = SessionLocal()
+        try:
+            # --- verify room membership ---
+            member = db.query(RoomMember).filter(
+                RoomMember.room_id == room_id,
+                RoomMember.user_id == current_user["id"]
+            ).first()
+            if not member:
+                raise HTTPException(status_code=403, detail="not_in_room")
+            
+            q = db.query(Message).filter(
+                Message.room_id == room_id
+            )
+
+            # --- cursor filter ---
+            if before:
+                try:
+                    before_dt = _dt.datetime.fromisoformat(
+                        before.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="invalid_before_cursor")
+                
+                q = q.filter(Message.timestamp < before_dt)
+
+            rows = (
+                q.order_by(Message.timestamp.desc())
+                    .limit(limit + 1)
+                    .all()
+            )
+
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+
+            # materialize to plain dicts
+            out = []
+            for m in rows:
+                out.append({
+                    "type": "message",
+                    "id": m.id,
+                    "author": m.author_username,
+                    "author_id": m.author_id,
+                    "timestamp": m.timestamp.isoformat().replace("+00:00", "Z"),
+                    "edited_at": m.edited_at.isoformat().replace("+00:00","Z") if m.edited_at else None,
+                    "content": m.content,
+                    "reply_to": m.reply_to,
+                    "deleted": m.deleted,
+                    "pinned": m.pinned,
+                    "pinned_by": m.pinned_by,
+                    "pinned_at": m.pinned_at.isoformat().replace("+00:00","Z") if m.pinned_at else None,
+                    "reactions": m.reactions or {},
+                })
+
+            next_cursor = out[-1]["timestamp"] if out else None
+            return out, has_more, next_cursor
+
+        finally:
+            db.close()
+
+    messages, has_more, next_cursor = await run_in_threadpool(_load)
+    return {
+        "messages": messages,
+        "has_more": has_more,
+        "next_cursor": next_cursor
+    }
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -510,10 +658,16 @@ async def list_rooms(current_user=Depends(get_current_user)):
     def _list():
         db = SessionLocal()
         try:
-            rooms = db.query(Room).order_by(Room.created_at.asc()).all()
+            rooms = (
+                db.query(Room)
+                    .join(RoomMember, RoomMember.room_id == Room.id)
+                    .filter(RoomMember.user_id == current_user["id"])
+                    .order_by(Room.created_at.asc())
+                    .all())
             return [{"id": r.id, "name": r.name} for r in rooms]
         finally:
             db.close()
+
     return {"results": await run_in_threadpool(_list)}
 
 @app.get("/gif/search")
@@ -534,7 +688,7 @@ def gif_search(q: str, limit: int = 20, offset: int = 0):
     return {"results": out}
 
 @app.get("/gif/trending")
-def gid_trending(limit: int = 20, offset: int = 0):
+def gif_trending(limit: int = 20, offset: int = 0):
     raw = query_giphy_trending(limit, offset)
     out = []
     for item in raw.get("data", []):
@@ -573,7 +727,14 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
     """
     payload: { gif_id, url, preview?, title?, metadata? }
     """
-    gif_id = payload.get("gif_id") or payload.get("id") or payload.get("url")
+    #gif_id = payload.get("gif_id") or payload.get("id") or payload.get("url")
+    metadata = payload.get("metadata") or {}
+    provider_id = None
+    if isinstance(metadata, dict):
+        provider_id = metadata.get("provider_id") or metadata.get("id")
+
+    gif_id = provider_id or payload.get("gif_id") or payload.get("id") or payload.get("url")
+
     url = payload.get("url")
     if not gif_id or not url:
         raise HTTPException(status_code=400, detail="gif_id and url required")
@@ -597,7 +758,12 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
                 ).first()
             
             if existing:
-                return {"ok": True, "id": existing.id}
+                orig = None
+                try:
+                    orig = (existing.metadata_json or {}).get("original_gif_id")
+                except Exception:
+                    orig = None
+                return {"ok": True, "id": existing.id, "gif_id": existing.gif_id, "original_gif_id": orig}
             
             safe_url = (url or "")[:2048]
             safe_preview = (preview or "")[:1024]
@@ -614,7 +780,12 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             db.add(fav)
             db.commit()
             db.refresh(fav)
-            return {"ok": True, "id": fav.id}
+
+            orig_return = None
+            if metadata and isinstance(metadata, dict):
+                orig_return = metadata.get("original_gif_id")
+
+            return {"ok": True, "id": fav.id, "gif_id": fav.gif_id, "original_gif_id": orig_return}
 
         except DataError:
             db.rollback()
@@ -630,7 +801,7 @@ async def add_gif_favorite(payload: Dict[str, Any], current_user = Depends(get_c
             db.add(fav)
             db.commit()
             db.refresh(fav)
-            return {"ok": True, "id": fav.id}
+            return {"ok": True, "id": fav.id, "gif_id": fav.gif_id, "original_gif_id": (metadata or {}).get("original_gif_id")}
         finally:
             db.close()
             
@@ -709,13 +880,17 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             db.close()
 
-    def get_room_by_id(rid: str):
+    def get_room_for_user(rid: str, uid: int):
         db = SessionLocal()
         try:
-            r = db.query(Room).filter(Room.id == str(rid)).first()
-            return {"id": r.id, "name": r.name} if r else None
+            r = db.query(Room).filter(Room.id == rid).first()
+            if not r: return None
+            m = db.query(RoomMember).filter(RoomMember.room_id==rid, RoomMember.user_id==uid).first()
+            if not m: return None
+            return {"id": r.id, "name": r.name}
         finally:
             db.close()
+
 
     user_info = await run_in_threadpool(get_user_by_id, user_id)
     if not user_info:
@@ -723,7 +898,10 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008, reason="user not found")
         return
     
-    room_info = await run_in_threadpool(get_room_by_id, room_id)
+    room_info = await run_in_threadpool(
+        get_room_for_user, 
+        room_id,
+        user_info["id"])
     if not room_info:
         await websocket.close(code=1008, reason="room not found")
         return
@@ -789,7 +967,7 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             db.close()
 
-    history = await run_in_threadpool(load_history, 200)
+    history = await run_in_threadpool(load_history, 400)
 
     usernames = {m["author"] for m in history if m.get("author")}
     user_dir = await run_in_threadpool(load_user_directory, usernames)
@@ -799,8 +977,9 @@ async def websocket_endpoint(websocket: WebSocket):
     # ensure connectionmanager has the loaded history in memory (avoid later not_found)
     for m in history:
         # avoid duplicate
-        if not connectionmanager.find_message(m["id"]):
+        if m["id"] not in connectionmanager.messages_index:
             connectionmanager.store_message(m)
+
     print(f"[ws] sending history ({len(history)} messages) to {client_meta['username']}")
     await connectionmanager.send_personal_message({"type": "history", "messages": history}, websocket)
 
@@ -821,6 +1000,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 m_id = str(uuid.uuid4())
                 timestamp = _dt.datetime.now(_dt.timezone.utc)
 
+                content = data.get("content") or ""
+                gif = data.get("gif")
+                if (not content.strip()) and isinstance(gif, dict):
+                    content = gif.get("url") or gif.get("preview") or ""
+
                 def save_msg():
                     db = SessionLocal()
                     try:
@@ -829,7 +1013,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             author_id=client_meta["user_id"],
                             author_username=client_meta["username"],
                             timestamp=timestamp,
-                            content=data.get("content",""),
+                            content=content,
                             reply_to=data.get("reply_to"),
                             room_id=room_id,
                             deleted=False,
@@ -846,7 +1030,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "author": client_meta["username"],
                         "author_id": client_meta["user_id"],
                         "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
-                        "content": data.get("content",""),
+                        "content": content,
                         "reply_to": data.get("reply_to"),
                         "room_id": room_id,
                         "deleted": False,
@@ -1090,10 +1274,23 @@ async def websocket_endpoint(websocket: WebSocket):
                 await connectionmanager.send_personal_message({"type":"error","error":"unknown_type","got": msg_type}, websocket)
 
     except WebSocketDisconnect:
-        connectionmanager.disconnect(websocket)
+        pass
+    except Exception as e:
+        print("[ws] unexpected error:", repr(e))
+    finally:
+        meta = connectionmanager.disconnect(websocket)
 
-        rid = client_meta.get("room_id")
-        if rid:
-            await connectionmanager.broadcast_presence_snapshot_room(rid)
-            await connectionmanager.broadcast_presence_change_room(rid, client_meta["username"], "offline")
-            await connectionmanager.broadcast_room(rid, {"type":"notice","text": f"User {client_meta['username']} left the chat"})
+        # If we had a known user+room, broadcast offline + updated snapshot + notice
+        if meta:
+            rid = meta.get("room_id")
+            username = meta.get("username")
+            if rid and username:
+                try:
+                    await connectionmanager.broadcast_presence_change_room(rid, username, "offline")
+                    await connectionmanager.broadcast_presence_snapshot_room(rid)
+                    await connectionmanager.broadcast_room(
+                        rid,
+                        {"type": "notice", "text": f"User {username} left the chat"}
+                    )
+                except Exception as e:
+                    print("[ws] failed to broadcast disconnect events:", repr(e))

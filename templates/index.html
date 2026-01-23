@@ -401,8 +401,29 @@
   let unreadCount = 0;
   let windowFocused = true;
 
+  let hasMoreHistory = true;
+  let nextCursor = null;
+  let loadingOlder = false;
+
   window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chat'});
   window.addEventListener('blur', () => { windowFocused = false; });
+
+  async function fetchRoomMessagesPage(roomId, before=null, limit=50) {
+    const token = localStorage.getItem('access_token');
+    const qs = new URLSearchParams();
+    if (before) qs.set('before', before);
+    qs.set('limit', String(limit));
+
+    const res = await fetch(`/rooms/${encodeURIComponent(roomId)}/messages?` + qs.toString(), {
+      headers: { token }
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(()=>({}));
+      throw new Error(j.detail || `history fetch failed (${res.status})`);
+    }
+    return await res.json(); // {messages, has_more, next_cursor}
+  }
+
 
   async function loadFavoriteMap() {
     favoriteMap = {};
@@ -413,7 +434,14 @@
       if (!res.ok) return;
       const j = await res.json();
       (j.results || []).forEach(f => {
-        favoriteMap[String(f.gif_id)] = f.id;
+        const fid = f.id;
+
+        if (f.gif_id) favoriteMap[String(f.gif_id)] = fid;
+
+        if (f.url) favoriteMap[String(f.url)] = fid;
+
+        const orig = f.metadata && f.metadata.original_gif_id;
+        if (orig) favoriteMap[String(orig)] = fid;
       });
       console.log('[favorites] loaded', Object.keys(favoriteMap).length);
     } catch (e) {
@@ -494,6 +522,33 @@
     panelEl.style.top = `${top}px`;
   }
 
+  function prependMessages(container, wrapper, msgs) {
+    if (!container || !wrapper || !msgs.length) return;
+
+    // Record the current scroll offset from top-of-container content
+    const prevScrollHeight = wrapper.scrollHeight;
+    const prevScrollTop = wrapper.scrollTop;
+
+    // Render in reverse so that final DOM order is oldest->newest at the top
+    // IMPORTANT: API returns newest->oldest; we want older messages to appear above current ones
+    const frag = document.createDocumentFragment();
+
+    const toInsert = msgs.slice().reverse();
+    toInsert.forEach(m => {
+      if (m.deleted) return;
+      msgIndex[m.id] = m;
+      const node = renderMessage(m);
+      frag.appendChild(node);
+    });
+
+    container.prepend(frag);
+
+    // Keep the user at the same visible content position
+    const newScrollHeight = wrapper.scrollHeight;
+    wrapper.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+  }
+
+
   function setPinsButtonState(isOpen) {
     const btn = document.getElementById('viewPinsBtn');
     if (!btn) return;
@@ -533,6 +588,14 @@
       favBtn.title = favId ? 'Unfavorite' : 'Favorite';
     });
   } 
+
+  function removeFavoriteEntriesById(fid) {
+    const sid = String(fid);
+    Object.keys(favoriteMap).forEach(k => {
+      if (String(favoriteMap[k]) === sid) delete favoriteMap[k];
+    });
+  }
+
 
  // cache-busting + diagnostics
   fetch('/static/emojis.json?ts=' + Date.now(), {cache: 'no-store'})
@@ -587,15 +650,69 @@
   }
 
   function ensureEndSpacer(container){
-  // ensure there is a spacer as last child so the composer doesn't cover last message
-  if (!container) return;
-  const last = container.lastElementChild;
-  if (!last || !last.classList || !last.classList.contains('messages-end-spacer')) {
-    const spacer = document.createElement('div');
-    spacer.className = 'messages-end-spacer';
-    container.appendChild(spacer);
+    // ensure there is a spacer as last child so the composer doesn't cover last message
+    if (!container) return;
+    const last = container.lastElementChild;
+    if (!last || !last.classList || !last.classList.contains('messages-end-spacer')) {
+      const spacer = document.createElement('div');
+      spacer.className = 'messages-end-spacer';
+      container.appendChild(spacer);
+    }
   }
-}
+
+  function showAppUI() {
+    const authBox = document.getElementById('authBox');
+    const chatUI = document.getElementById('chatUI');
+    const header = document.getElementById('appHeader');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    if (authBox) authBox.style.display = 'none';
+    if (chatUI) chatUI.style.display = 'block';
+    if (header) header.style.display = 'flex';
+    if (logoutBtn) logoutBtn.style.display = 'inline-block';
+  }
+
+  function showAuthUI() {
+    const authBox = document.getElementById('authBox');
+    const chatUI = document.getElementById('chatUI');
+    const header = document.getElementById('appHeader');
+    const logoutBtn = document.getElementById('logoutBtn')
+
+    if (authBox) authBox.style.display = 'block';
+    if (chatUI) chatUI.style.display = 'none';
+    if (header) header.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  }
+
+  function attachInfiniteScroll() {
+    const wrapper = document.querySelector('.chat-wrapper');
+    const container = document.getElementById('container');
+    if (!wrapper || !container) return;
+
+    wrapper.addEventListener('scroll', async () => {
+      if (loadingOlder || !hasMoreHistory) return;
+      if (wrapper.scrollTop > 60) return; // only when near top
+
+      const roomId = localStorage.getItem('room_id');
+      if (!roomId || !nextCursor) return;
+
+      loadingOlder = true;
+      try {
+        const page = await fetchRoomMessagesPage(roomId, nextCursor, 50);
+        const msgs = page.messages || [];
+        hasMoreHistory = !!page.has_more;
+        nextCursor = page.next_cursor || nextCursor;
+
+        prependMessages(container, wrapper, msgs);
+      } catch (e) {
+        console.warn('load older failed', e);
+      } finally {
+        loadingOlder = false;
+      }
+    });
+  }
+
+
 
   function showMessageElement(el) {
     const container = document.getElementById('container');
@@ -620,7 +737,7 @@
     }
   }
 
-  function renderMessage(msg, isLocalEcho=false) {
+  function renderMessage(msg, isLocalEcho=false, prevMsg=null) {
   // if message flagged deleted, skip rendering (safety)
   if (msg.deleted) return document.createElement('div');
 
@@ -656,6 +773,13 @@
     meta.appendChild(editedSpan);
   }
   body.appendChild(meta);
+
+  const showTime = shouldShowTimestamp(prevMsg, msg, true);
+  if (showTime) {
+    try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent=''; } 
+    } else {
+      timeSpan.textContent = '';
+    }
 
   // --- inline reply preview (clickable) ---
   if (msg.reply_to) {
@@ -717,13 +841,24 @@
       if (favoriteMap[gifKey]) {
         const fid = favoriteMap[gifKey];
         const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
-        if (res.ok) { delete favoriteMap[gifKey]; updateGifFavUI(gifKey); favBtn.textContent='♡'; }
+        if (res.ok) { 
+          removeFavoriteEntriesById(fid); 
+          updateGifFavUI(gifKey); 
+          favBtn.textContent='♡'; 
+        }
       } else {
-        const payload = { gif_id: text, url: text, preview: text, title: '' };
+        const payload = { gif_id: gifKey, url: text, preview: text, title: '' };
         const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
+
         if (res.ok) {
           const j = await res.json().catch(()=>({}));
-          if (j.id) favoriteMap[gifKey] = j.id;
+          if (j.id) {
+            favoriteMap[String(gifKey)] = j.id;
+
+            if (j.gif_id) favoriteMap[String(j.gif_id)] = j.id;
+
+            if (j.original_gif_id) favoriteMap[String(j.original_gif_id)] = j.id;
+          }
           favBtn.textContent='♥';
           updateGifFavUI(gifKey);
         }
@@ -922,10 +1057,10 @@
 
     if (token && user) {
       myId = user;            // <- ensure myId is set for connectSocket
+      showAppUI();
       connectSocket();        // will show chatUI on successful WS open
     } else {
-      document.getElementById('chatUI').style.display = 'none';
-      document.getElementById('authBox').style.display = 'block';
+      showAuthUI();
     }
   });
 
@@ -1173,60 +1308,6 @@
     }));
   };
 
-
-    async function render(results) {
-      grid.innerHTML = '';
-      // refresh favorite map
-      await loadFavoriteMap();
-      for (const g of results) {
-        const url = g.url;
-        const idKey = String(g.id || g.url || g.gif_id || url);
-        const thumb = document.createElement('img');
-        thumb.src = g.preview || g.url;
-        thumb.style.width = '120px';
-        thumb.style.cursor = 'pointer';
-        thumb.onclick = () => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) { alert('Not connected'); return; }
-          socket.send(JSON.stringify({ type: 'message', content: url }));
-          gifPicker.style.display = 'none';
-        };
-
-        const favBtn = document.createElement('button');
-        favBtn.textContent = favoriteMap[idKey] ? '♥' : '♡';
-        favBtn.onclick = async (e) => {
-          e.stopPropagation();
-          if (!token) { alert('Log in to favorite'); return; }
-          if (favoriteMap[idKey]) {
-            // unfav
-            const fid = favoriteMap[idKey];
-            const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
-            if (res.ok) { delete favoriteMap[idKey]; favBtn.textContent = '♡'; updateGifFavUI(idKey); }
-          } else {
-            const payload = { gif_id:g.url, url: g.url, preview: g.preview, title: g.title || '', metadata: { provider_id: g.id} };
-            const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
-            if (res.ok) {
-              const j = await res.json().catch(()=>({}));
-              if (j.id) favoriteMap[idKey] = j.id;
-              favBtn.textContent = '♥';
-              updateGifFavUI(idKey);
-            }
-          }
-        };
-
-        const box = document.createElement('div');
-        box.style.position = 'relative';
-        box.style.display = 'inline-block';
-        box.style.width = '120px';
-        box.appendChild(thumb);
-        favBtn.style.position = 'absolute';
-        favBtn.style.right = '4px';
-        favBtn.style.top = '4px';
-        favBtn.style.padding = '2px 6px';
-        box.appendChild(favBtn);
-        grid.appendChild(box);
-      }
-    }
-
   function getGifKeyFromResult(g) {
     return String(g.id || g.gif_id ||  g.gifId || g.url || '');
   }
@@ -1255,7 +1336,11 @@
       thumb.title = g.title || '';
       thumb.onclick = () => {
         if (!socket || socket.readyState !== WebSocket.OPEN) { alert('Not connected'); return; }
-        socket.send(JSON.stringify({ type:"message", content: g.url }));
+        socket.send(JSON.stringify({ 
+          type:"message", 
+          content: g.url, 
+          gif: { provider: "giphy", id: g.id, url: g.url, preview: g.preview, title: g.title } 
+        }));
         document.getElementById('gifPicker').style.display = 'none';
       };
       wrapper.appendChild(thumb);
@@ -1284,7 +1369,7 @@
             headers: {'token': token}
           });
           if (res.ok) {
-            delete favoriteMap[gifKey];
+            removeFavoriteEntriesById(fid);
             favBtn.textContent = '♡';
             favBtn.title = 'Favorite';
             updateGifFavUI(gifKey);
@@ -1294,7 +1379,7 @@
         } else {
           // add favorite
           const payload = {
-            gif_id: g.url,
+            gif_id: g.id,
             url: g.url,
             preview: g.preview,
             title: g.title,
@@ -1307,14 +1392,14 @@
           });
           if (res.ok) {
             const j = await res.json().catch(()=>({}));
-            // server returns {"ok": True, "id": <fav_row_id>}
             if (j.id) {
-              favoriteMap[gifKey] = j.id;
-            } else {
-              favBtn.textContent = '♥';
-              favoriteMap[gifKey] = null;
-              updateGifFavUI(gifKey);
+              favoriteMap[String(gifKey)] = j.id;
+              if (j.gif_id) favoriteMap[String(j.gif_id)] = j.id
+              if (j.original_gif_id) favoriteMap[String(j.original_gif_id)] = j.id;
             }
+              favBtn.textContent = '♥';
+              favBtn.title = 'Unfavorite';
+              updateGifFavUI(gifKey);
           } else {
             const j = await res.json().catch(()=>({}));
             alert('Favorite failed: ' + (j.detail || JSON.stringify(j)));
@@ -1496,23 +1581,24 @@
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ username: u, password: p })
       });
-      const j = await res.json();
-      console.log('login response', res.status, j);
+    const j = await res.json();
+    console.log('login response', res.status, j);
 
-      if (res.ok && j.access_token) {
-        localStorage.setItem('access_token', j.access_token);
-        localStorage.setItem('username', j.username);
+    if (res.ok && j.access_token) {
+      localStorage.setItem('access_token', j.access_token);
+      localStorage.setItem('username', j.username);
+      myId = j.username;
+      showAppUI();
 
-        myId = j.username;
+      document.getElementById('authStatus').textContent = `Logged in as ${j.username}`;
 
-        document.getElementById('authStatus').textContent = `Logged in as ${j.username}`;
-
-        // hide auth UI
-        const authBox = document.getElementById('authBox');
-        if (authBox) authBox.style.display = 'none';
-
-        // auto-connect
-        try { await connectSocket(); } catch(e){ console.error('auto-connect failed', e); }
+      // auto-connect
+      try { 
+        await connectSocket(); 
+      } catch(e){ 
+        console.error('auto-connect failed', e); 
+        document.getElementById('authStatus').textContent = 'Login ok but failed to connect: ' + e;
+        }
 
       } else {
         const err = (j && (j.detail || j.error)) ? (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) : JSON.stringify(j);
@@ -1556,52 +1642,82 @@ function resetChatUI(){
 async function connectSocket() {
   // if already connected, do nothing (or optionally re-open)
   if (socket && socket.readyState === WebSocket.OPEN) {
-    console.log("WebSocket already open");
+    showAppUI();
+    document.getElementById('connectBtn').disabled = true;
+
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logout) logoutBtn.style.display = 'inline-block';
+
     return;
   }
 
   const token = localStorage.getItem('access_token')
   const storedUsername = localStorage.getItem('username');
-
   myId = storedUsername || myId;
+
   console.log('[connectSocket] token?', !!token, 'myId:', myId);
   console.log('[connectSocket] page protocol:', window.location.protocol, 'host:', window.location.host);
 
   // create WS and install handlers
   if (!token || !myId) {
     document.getElementById('status').textContent = 'Not logged in';
+    document.getElementById('chatUI').style.display = 'none';
+    document.getElementById('authBox').style.display = 'block';
     console.warn('[connectSocket] missing token or username', { token: !!token, myId })
     return;
+  }
+
+  document.getElementById('chatUI').style.display = 'block';
+  document.getElementById('status').textContent = 'Connecting...'
+
+  let roomId;
+
+  try {
+    roomId = await ensureDefaultRoom();
+  } catch (e) {
+    console.error('[connectSocket] ensureDefaultRoom failed', e);
+    document.getElementById('status').textContent = 'Failed to load rooms. See console.';
+    // revert so user isn't stuck
+    document.getElementById('chatUI').style.display = 'none';
+    document.getElementById('authBox').style.display = 'block';
+    throw e;
   }
 
   // build ws url relative to current page so it works on Render / localhost / prod
   const isSecure = (window.location.protocol === 'https:');
   const wsProto = isSecure ? 'wss' : 'ws';
   const host = window.location.host; // includes port if any
-  const roomId = await ensureDefaultRoom();
+
   const wsUrl = `${wsProto}://${host}/ws?token=${encodeURIComponent(token)}&room_id=${encodeURIComponent(roomId)}`;
 
   console.log('[connectSocket] opening', wsUrl);
   document.getElementById('status').textContent = 'Connecting...';
   socket = new WebSocket(wsUrl);
 
+  // hydrate header from /me so display_name + avatar_color apply immediately
+  try {
+    const me = await fetchMe();
+    if (me) {
+      const shownName = me.display_name || me.username || myId;
+      const headerUserEl = document.getElementById('headerUsername');
+      const headerAvatarEl = document.getElementById('headerAvatar');
+
+      if (headerUserEl) headerUserEl.textContent = shownName;
+      if (headerAvatarEl) {
+        headerAvatarEl.textContent = shownName ? shownName[0].toUpperCase() : '?';
+        if (me.avatar_color) headerAvatarEl.style.background = me.avatar_color;
+      }
+    }
+  } catch(e) {
+    console.warn('fetchMe failed on connect', e);
+  }
+
   socket.addEventListener('open', () => {
 
     ensureNotificationPermission();
 
-    // Set header username + avatar
-    const headerUserEl = document.getElementById('headerUsername');
-    const headerAvatarEl = document.getElementById('headerAvatar');
-    const title = document.getElementById('pageTitle')
-
-    if (headerUserEl) headerUserEl.textContent = myId || '';
-    if (headerAvatarEl) headerAvatarEl.textContent = (myId && myId[0]) ? myId[0].toUpperCase() : '?';
-    if (title) title.style.display = 'none';
-
     document.getElementById('appHeader').style.display = 'flex';
     document.getElementById('headerAvatar').style.display = 'flex';
-
-
     document.getElementById('status').textContent = 'Connected as ' + myId;
 
     // load favorite gifs
@@ -1614,6 +1730,7 @@ async function connectSocket() {
 
     // Show chat UI
     document.getElementById('chatUI').style.display = 'block';
+    document.getElementById('status')
 
     // Hide auth UI
     document.getElementById('authBox').style.display = 'none';
@@ -1623,6 +1740,8 @@ async function connectSocket() {
 
     // Disable connect
     document.getElementById('connectBtn').disabled = true;
+
+    attachInfiniteScroll();
   });
 
   socket.addEventListener('error', (ev) => {
@@ -1633,6 +1752,14 @@ async function connectSocket() {
   socket.addEventListener('close', (ev) => {
     console.log('[WS] closed code=', ev.code, 'reason=', ev.reason, 'wasClean=', ev.wasClean);
     document.getElementById('status').textContent = `Disconnected (code ${ev.code})`;
+
+    // if we never successfully connected, show auth UI again
+    if (ev.code === 1008 || ev.code === 1006) {
+      document.getElementById('chatUI').style.display = 'none';
+      document.getElementById('authBox').style.display = 'block';
+      document.getElementById('connectBtn').disabled = false;
+    }
+
     if (ev.code === 1008) alert('Connection closed due to auth/policy (1008). Token may be invalid / expired.');
   });
 
@@ -1651,13 +1778,20 @@ async function connectSocket() {
     if (payload.type === 'history') {
       const msgs = payload.messages || [];
       const container = document.getElementById('container');
+      const wrapper = document.querySelector('.chat-wrapper');
+
       container.innerHTML = ''; // clear
-      msgs.forEach(m => {
-        if (m.deleted) return; // skip deleted messages entirely
-        const node = renderMessage(m);
+      msgs.forEach((m, i) => {
+        const prev = i > 0 ? msgs[i-1] : null;
+        const node = renderMessage(m, false, prev);
         showMessageElement(node);
-        ensureEndSpacer(container);
       });
+
+      const oldest = msgs.length ? msgs[0] : null;
+      nextCursor = oldest ? oldest.timestamp : null;
+      hasMoreHistory = true;
+
+      ensureEndSpacer(container);
       return;
     }
 
@@ -1868,6 +2002,25 @@ async function connectSocket() {
     // reconnect
     await connectSocket();
   }
+
+  function minuteKey(isoTs) {
+    const d = new Date(isoTs);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()} ${d.getHours()}:${d.getMinutes()}`;
+  }
+
+  // Show time only if it differs from the previous rendered message.
+  // If alsoSameAuthor=true, we only hide when both minute and author match.
+  function shouldShowTimestamp(prevMsg, curMsg, alsoSameAuthor=true) {
+    if (!prevMsg) return true;
+    const a = minuteKey(prevMsg.timestamp);
+    const b = minuteKey(curMsg.timestamp);
+    if (!a || !b) return true;
+    if (a !== b) return true;
+    if (alsoSameAuthor && prevMsg.author !== curMsg.author) return true;
+    return false;
+  }
+
 
 
   // send on Enter (Shift+Enter for newline) — attach once on initial load
@@ -2148,25 +2301,8 @@ document.getElementById('logoutBtn').onclick = () => {
   // Reset UI + state
   resetChatUI();
 
-  // Hide chat UI
-  document.getElementById('chatUI').style.display = 'none';
-
-  // Show auth UI
-  document.getElementById('authBox').style.display = 'block';
-
-  document.getElementById('status').textContent = 'Logged out';
-
-  // Hide logout
-  document.getElementById('logoutBtn').style.display = 'none';
-
-  // Enable connect
-  document.getElementById('connectBtn').disabled = false;
+  showAuthUI();
 };
-
-  // hide logout at initial load
-  const lb = document.getElementById('logoutBtn');
-  if (lb) lb.style.display = 'none';
-
 </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Text, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
 import uuid
@@ -59,7 +59,6 @@ class Message(Base):
 
 Index("ix_messages_room_time", Message.room_id, Message.timestamp)
 
-
 class Favorite(Base):
     __tablename__ = "favorites"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -70,3 +69,19 @@ class Favorite(Base):
     title = Column(String(256), nullable=True)
     metadata_json = Column(JSON, default=dict, nullable=False)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "gif_id", name="uq_favorites_user_gif"),
+    )
+
+class RoomMember(Base):
+    __tablename__ = "room_members"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    room_id = Column(String(36), ForeignKey("rooms.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String(20), default="member", nullable=False)
+    joined_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+    __table_args__ = (
+        Index("ix_room_members_unique", "room_id", "user_id", unique=True),
+    )
