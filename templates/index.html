@@ -17,6 +17,7 @@
       --subtle:#2a2d31;
       --composer-height:84px;
       --header-height:52px;
+      --stage-height: 0px;
     }
 
     html,body {
@@ -56,7 +57,7 @@
       position: fixed;
       left: 0;
       right: 260px;
-      top: var(--header-height);
+      top: calc(var(--header-height) + var(--stage-height));
       bottom: calc(var(--composer-height) + 12px);
       padding: 12px;
       overflow: auto;
@@ -331,6 +332,21 @@
     .btn-small:active, .btn-primary:active { transform:translateY(1px); }
     a { color:var(--accent); }
     .messages-end-spacer { height: calc(var(--composer-height) - 12px); flex-shrink:0; }
+
+    #videoStage {
+      position: fixed;
+      left: 0;
+      right: 260px;
+      top: var(--header-height);
+      height: var(--stage-height);
+      display: none;
+      gap: 8px;
+      padding: 8px;
+      background: rgba(0,0,0,0.15);
+      z-index: 34;
+      overflow: auto;
+    }
+
     </style>
 </head>
 
@@ -364,6 +380,12 @@
       <div class="header-right">
         <button id="voiceBtn" class="btn-small">Voice</button>
         <button id="muteBtn" class="btn-small" style="display:none;">Mute</button>
+
+        <button id="audioBtn" class="btn-small">Audio</button>
+
+        <button id="cameraBtn" class="btn-small">Camera</button>
+        <button id="camOffBtn" class="btn-small" style="display:none;">Stop Cam</button>
+
         <button id="viewPinsBtn" class="btn-small">Pins</button>
         <button id="roomsBtn" class="btn-small">Rooms</button>
         <button id="inviteBtn" class="btn-small">Invite</button>
@@ -371,6 +393,7 @@
         <button id="connectBtn" class="btn-small">Connect</button>
         <button id="logoutBtn" class="btn-small">Logout</button>
       </div>
+
 
       <div id="settingsModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
         <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
@@ -386,6 +409,52 @@
             <textarea id="setBio" placeholder="Bio" rows="3"></textarea>
             <button id="saveSettings" class="btn-primary">Save</button>
             <div id="settingsMsg" style="color:var(--muted); font-size:12px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="audioModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
+        <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:700;">Audio Settings</div>
+            <button id="closeAudio" class="btn-small">Close</button>
+          </div>
+
+          <div style="margin-top:10px; display:grid; gap:10px;">
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Microphone</span>
+              <select id="micSelect"></select>
+            </label>
+
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Speaker / Output</span>
+              <select id="spkSelect"></select>
+              <div style="color:var(--muted); font-size:12px;">If this is empty, your browser may not support output device selection.</div>
+            </label>
+
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Mic Gain</span>
+              <input id="micGain" type="range" min="0" max="2" step="0.05" value="1">
+              <div id="micGainVal" style="color:var(--muted); font-size:12px;">1.00x</div>
+            </label>
+
+            <label style="display:flex; gap:10px; align-items:center;">
+              <input id="optEcho" type="checkbox" checked>
+              <span>Echo cancellation</span>
+            </label>
+
+            <label style="display:flex; gap:10px; align-items:center;">
+              <input id="optNoise" type="checkbox" checked>
+              <span>Noise suppression</span>
+            </label>
+
+            <label style="display:flex; gap:10px; align-items:center;">
+              <input id="optAgc" type="checkbox" checked>
+              <span>Auto gain control</span>
+            </label>
+
+            <button id="applyAudio" class="btn-primary">Apply</button>
+            <div id="audioMsg" style="color:var(--muted); font-size:12px;"></div>
           </div>
         </div>
       </div>
@@ -406,7 +475,6 @@
           <div id="roomsMsg" style="color:var(--muted); font-size:12px; margin-top:8px;"></div>
         </div>
       </div>
-
     </header>
 
     <!-- Main chat area -->
@@ -416,6 +484,14 @@
       <div id="typingLine" class="typingLine"></div>
       <div id="container" class="messages"></div>
     </main>
+
+    <div id="videoStage" style="
+      position:fixed; left:0; right:260px;
+      top:var(--header-height); height:220px;
+      display:none; gap:8px; padding:8px;
+      background:rgba(0,0,0,0.15);
+      z-index:34; overflow:auto;">
+    </div>
 
     <!-- Pins panel toggled via View Pins -->
     <div id="pinsPanel" class="pins-panel" style="display:none;">
@@ -756,6 +832,30 @@
     lastSpeakingFlipAt = 0;
   }
 
+  function supportsSetSinkId(el) {
+    return !!(el && typeof el.setSinkId === 'function');
+  }
+
+  async function listDevices() {
+    // You generally only get full labels after permission is granted once.
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    const spks = devices.filter(d => d.kind === 'audiooutput');
+    return { mics, spks };
+  }
+
+  function fillSelect(selectEl, items, selectedId) {
+    selectEl.innerHTML = '';
+    items.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `${d.kind} (${d.deviceId.slice(0,6)}...)`;
+      if (selectedId && d.deviceId === selectedId) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  }
+
+
 
   function setPinsButtonState(isOpen) {
     const btn = document.getElementById('viewPinsBtn');
@@ -951,11 +1051,7 @@
   function getIceServers() {
     // STUN is enough for local + many networks; TURN can be added later.
     return [
-      { urls: "stun:stun.l.google.com:19302" }, {
-        urls: "",
-        username: "",
-        credential: ""
-      }
+      { urls: "stun:stun.l.google.com:19302" }
     ];
   }
 
@@ -999,6 +1095,11 @@
     socket.send(JSON.stringify({ type: "voice_signal", to, data }));
   }
 
+  function requestRenegotiate(peerUsername) {
+    sendVoiceSignal(peerUsername, { kind: "renegotiate" });
+  }
+
+
   async function ensurePeerConnection(peerUsername) {
     if (voice.pcs.has(peerUsername)) return voice.pcs.get(peerUsername);
 
@@ -1009,6 +1110,12 @@
       voice.localStream.getTracks().forEach(t => pc.addTrack(t, voice.localStream));
     }
 
+    // If camera is already enabled, add the video track to this new peer connection too
+    if (video.enabled && video.localStream) {
+      video.localStream.getTracks().forEach(t => pc.addTrack(t, video.localStream));
+    }
+
+
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
         sendVoiceSignal(peerUsername, { kind: "ice", candidate: ev.candidate });
@@ -1016,11 +1123,40 @@
     };
 
     pc.ontrack = (ev) => {
-      // Remote audio stream
       const [stream] = ev.streams;
-      const sink = ensureAudioSink(peerUsername);
-      sink.srcObject = stream;
+      if (!stream) return;
+
+      if (ev.track.kind === 'audio') {
+        const sink = ensureAudioSink(peerUsername);
+        sink.srcObject = stream;
+        // apply chosen output device if supported
+        const spkId = localStorage.getItem('spk_device_id') || '';
+        if (spkId && supportsSetSinkId(sink)) {
+          sink.setSinkId(spkId).catch(()=>{});
+        }
+      }
+
+      if (ev.track.kind === 'video') {
+        const tile = ensureVideoTile(peerUsername, false);
+        if (tile) {
+          tile.srcObject = stream;
+          showVideoOverlay(peerUsername, false);
+
+          // If remote stops camera, the track often ends or mutes
+          ev.track.addEventListener('ended', () => {
+            try { tile.srcObject = null; } catch(e) {}
+            showVideoOverlay(peerUsername, true);
+          });
+          ev.track.addEventListener('mute', () => {
+            showVideoOverlay(peerUsername, true);
+          });
+          ev.track.addEventListener('unmute', () => {
+            showVideoOverlay(peerUsername, false);
+          });
+        }
+      }
     };
+
 
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
@@ -1037,9 +1173,135 @@
     return pc;
   }
 
+  async function renegotiateWithAllPeers() {
+    if (!voice.enabled) return;
+
+    for (const u of voice.users) {
+      if (!u || u === myId) continue;
+
+      // If I'm the deterministic offerer, I can create the offer directly.
+      if (shouldInitiateOffer(myId, u)) {
+        try { await createAndSendOffer(u); } catch (e) { console.warn('renegotiate offer failed', u, e); }
+      } else {
+        // I'm NOT the offerer for this pair; ask the offerer to renegotiate.
+        requestRenegotiate(u);
+      }
+    }
+  }
+
+  async function startCamera() {
+    if (video.enabled) return;
+    if (!voice.enabled) {
+      alert('Join Voice first (audio call). Then enable Camera.');
+      return;
+    }
+
+    const attempts = [
+      { video: { width: 640, height: 360, frameRate: 24 } },
+      { video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } } },
+      { video: true }
+    ];
+
+    let stream = null;
+    let lastErr = null;
+
+    for (const constraints of attempts) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn('[camera] getUserMedia failed with', constraints, e.name, e.message);
+      }
+    }
+
+    if (!stream) {
+      const e = lastErr || new Error('Unknown camera error');
+      alert(`Camera failed: ${e.name}\n${e.message}\n\nCommon fixes:\n- Close other apps using camera\n- Allow camera permission for this site\n- Try http://localhost:8000`);
+      throw e;
+    }
+
+    video.localStream = stream;
+    video.enabled = true;
+
+    sendVoiceState({ video: true });
+
+    const localTile = ensureVideoTile(myId, true);
+    if (localTile) {
+      localTile.srcObject = stream;
+      showVideoOverlay(myId, false);
+    }
+
+    const vtrack = stream.getVideoTracks()[0];
+
+    for (const [username, pc] of voice.pcs.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) await sender.replaceTrack(vtrack);
+      else pc.addTrack(vtrack, stream);
+    }
+
+    document.getElementById('cameraBtn').style.display = 'none';
+    document.getElementById('camOffBtn').style.display = 'inline-block';
+
+    await renegotiateWithAllPeers();
+  }
+
+
+  function setStageVisible(on) {
+    const stage = document.getElementById('videoStage');
+    if (!stage) return;
+
+    if (on) {
+      document.documentElement.style.setProperty('--stage-height', '220px');
+      stage.style.display = 'flex';
+    } else {
+      document.documentElement.style.setProperty('--stage-height', '0px');
+      stage.style.display = 'none';
+    }
+  }
+
+
+  function stopCamera() {
+    if (!video.enabled) return;
+
+    // stop local track
+    if (video.localStream) {
+      video.localStream.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
+      video.localStream = null;
+    }
+
+    // remove video sender tracks from PCs
+    for (const [username, pc] of voice.pcs.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) {
+        try { pc.removeTrack(sender); } catch(e) {}
+      }
+    }
+
+    const localTile = ensureVideoTile(myId, true);
+    if (localTile) {
+      try { localTile.srcObject = null; } catch(e){}
+      showVideoOverlay(myId, true);
+    }
+
+    video.enabled = false;
+
+    sendVoiceState({ video: false });
+
+    document.getElementById('cameraBtn').style.display = 'inline-block';
+    document.getElementById('camOffBtn').style.display = 'none';
+
+    // Renegotiate to remove video from SDP
+    renegotiateWithAllPeers().catch(()=>{});
+  }
+
+
   async function createAndSendOffer(peerUsername) {
     const pc = await ensurePeerConnection(peerUsername);
-    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
     await pc.setLocalDescription(offer);
     sendVoiceSignal(peerUsername, { kind: "offer", sdp: pc.localDescription });
   }
@@ -1090,34 +1352,88 @@
   async function joinVoice() {
     if (voice.enabled) return;
 
-    console.log("[voice] joinVoice called; secure=", window.isSecureContext);
-    // Requires secure context in production (HTTPS). localhost is usually okay.
-    voice.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
-    console.log("[voice] got mic stream tracks:", voice.localStream.getTracks().map(t => t.kind));
+    const micDeviceId = localStorage.getItem('mic_device_id') || '';
+    const echo = (localStorage.getItem('opt_echo') ?? 'true') === 'true';
+    const noise = (localStorage.getItem('opt_noise') ?? 'true') === 'true';
+    const agc  = (localStorage.getItem('opt_agc') ?? 'true') === 'true';
+    const gain = parseFloat(localStorage.getItem('mic_gain') || '1');
+
+    const outAudio = await buildOutgoingAudioStream({ micDeviceId, echo, noise, agc, gain });
+
+    // voice.localStream should be the stream you add tracks from
+    voice.localStream = outAudio;
 
     voice.enabled = true;
     voice.muted = false;
     updateVoiceButtons();
 
-    // mark ourselves as in-voice locally and notify server of initial state
+    const myTile = ensureVideoTile(myId, true);
+    if (myTile) {
+      try { myTile.srcObject = null; } catch(e) {}
+      showVideoOverlay(myId, true); // show placeholder avatar
+    }
+
+
     setVS(myId, { in_voice: true, muted: false, speaking: false });
     sendVoiceState({ muted: false, speaking: false });
 
-    // start mic monitor
     startMicActivityMonitor();
     renderMembersSidebar();
 
-
-    // Tell server we are in voice; server will respond with voice_snapshot
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "voice_join" }));
     }
   }
 
+
+  async function buildOutgoingAudioStream({ micDeviceId, echo, noise, agc, gain }) {
+    // Stop existing raw stream tracks if we created them here
+    if (audioGraph.rawStream) {
+      audioGraph.rawStream.getTracks().forEach(t => { try{ t.stop(); } catch(e){} });
+    }
+    teardownAudioGraph();
+
+    const constraints = {
+      audio: {
+        deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+        echoCancellation: !!echo,
+        noiseSuppression: !!noise,
+        autoGainControl: !!agc
+      }
+    };
+
+    const raw = await navigator.mediaDevices.getUserMedia(constraints);
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(raw);
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = (typeof gain === 'number' ? gain : 1);
+
+    const dest = ctx.createMediaStreamDestination();
+    src.connect(gainNode);
+    gainNode.connect(dest);
+
+    audioGraph = { ctx, src, gainNode, dest, rawStream: raw, outStream: dest.stream };
+
+    return dest.stream;
+  }
+
+  async function replaceOutgoingAudioTrackOnPeers(newAudioTrack) {
+    for (const [username, pc] of voice.pcs.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+      if (sender) {
+        await sender.replaceTrack(newAudioTrack);
+      } else {
+        // if connection existed but had no sender yet
+        pc.addTrack(newAudioTrack, voice.localStream);
+      }
+    }
+  }
+
   function leaveVoice() {
     if (!voice.enabled) return;
+
+    try { stopCamera(); } catch(e) {}
 
     // inform room
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1147,6 +1463,13 @@
 
     const holder = document.getElementById("voiceAudioSinks");
     if (holder) holder.style.display = "none";
+
+    for (const u of Array.from(video.tiles.keys())) {
+      removeVideoTile(u);
+    }
+    video.tiles.clear();
+    video.overlays.clear();
+    setStageVisible(false);
   }
 
   function toggleMute() {
@@ -1486,6 +1809,126 @@
     muteBtn.addEventListener("click", () => toggleMute());
   }
 
+  let audioGraph = {
+    ctx: null,
+    gainNode: null,
+    src: null,
+    dest: null,
+    rawStream: null,
+    outStream: null
+  };
+
+  function teardownAudioGraph() {
+    try { audioGraph.src?.disconnect(); } catch(e){}
+    try { audioGraph.gainNode?.disconnect(); } catch(e){}
+    try { audioGraph.ctx?.close(); } catch(e){}
+    audioGraph = { ctx:null, gainNode:null, src:null, dest:null, rawStream:null, outStream:null };
+  }
+
+  const video = {
+    enabled: false,
+    localStream: null,   // just video stream (track)
+    tiles: new Map(),     // username -> HTMLVideoElement
+    overlays: new Map()
+  };
+
+  function ensureVideoTile(username, isLocal=false) {
+    if (!voice.enabled) return null;
+
+    setStageVisible(true);
+    const stage = document.getElementById('videoStage');
+
+    let el = video.tiles.get(username);
+    if (el) return el;
+
+    // tile box
+    const box = document.createElement('div');
+    box.style.position = 'relative';
+    box.style.width = '240px';
+    box.style.height = '160px';
+    box.style.borderRadius = '10px';
+    box.style.overflow = 'hidden';
+    box.style.background = '#000';
+
+    // video element
+    el = document.createElement('video');
+    el.autoplay = true;
+    el.playsInline = true;
+    el.muted = !!isLocal;
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.objectFit = 'cover';
+    el.style.display = 'block';
+
+    // overlay placeholder (shown when no video stream)
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.inset = '0';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.background = '#0b0c0e';
+
+    // avatar circle w/ initial + optional color
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.style.width = '64px';
+    avatar.style.height = '64px';
+    avatar.style.fontSize = '22px';
+    avatar.style.borderRadius = '50%';
+    avatar.style.display = 'flex';
+    avatar.style.alignItems = 'center';
+    avatar.style.justifyContent = 'center';
+
+    const prof = userDirectory[username] || {};
+    const shownName = prof.display_name || username;
+    avatar.textContent = shownName ? shownName[0].toUpperCase() : '?';
+    if (prof.avatar_color) avatar.style.background = prof.avatar_color;
+
+    overlay.appendChild(avatar);
+
+    box.appendChild(el);
+    box.appendChild(overlay);
+
+    const wrap = document.createElement('div');
+    wrap.style.display = 'grid';
+    wrap.style.gap = '6px';
+
+    const label = document.createElement('div');
+    label.textContent = username;
+    label.style.color = 'var(--muted)';
+    label.style.fontSize = '12px';
+
+    wrap.appendChild(box);
+    wrap.appendChild(label);
+    stage.appendChild(wrap);
+
+    video.tiles.set(username, el);
+    video.overlays.set(username, overlay);
+
+    // start with overlay visible
+    overlay.style.display = 'flex';
+
+    return el;
+  }
+
+  function showVideoOverlay(username, show) {
+    const ov = video.overlays.get(username);
+    if (!ov) return;
+    ov.style.display = show ? 'flex' : 'none';
+  }
+
+  function removeVideoTile(username) {
+    const el = video.tiles.get(username);
+    if (!el) return;
+    const wrap = el.parentElement;
+    try { wrap?.remove(); } catch(e){}
+    video.tiles.delete(username);
+
+    // hide stage if no tiles
+    const stage = document.getElementById('videoStage');
+    if (stage && video.tiles.size === 0) setStageVisible(false);
+  }
 
   const onlineUsers = new Set();
 
@@ -1702,7 +2145,6 @@
 
 
   //Gif Render
-
   document.getElementById('gifBtn').onclick = async function openGifPicker() {
     const gifPicker = document.getElementById('gifPicker');
     const gifBtn = document.getElementById('gifBtn');
@@ -2491,7 +2933,7 @@ async function connectSocket() {
     }
 
     if (payload.type === "voice_snapshot") {
-        // reset in_voice for everyone in this room
+      // reset in_voice for everyone in this room
       // (keep muted/speaking as last known if you want; this resets in_voice accurately)
       roomMembers.forEach(m => {
         if (m.username) setVS(m.username, { in_voice: false });
@@ -2519,8 +2961,11 @@ async function connectSocket() {
 
       // existing connect logic:
       if (voice.enabled) {
+        ensureVideoTile(myId, true);
+        showVideoOverlay(myId, !video.enabled);
         voice.users.forEach(async (u) => {
           if (!u || u === myId) return;
+          ensureVideoTile(u, u === myId)
           if (shouldInitiateOffer(myId, u)) {
             try { await createAndSendOffer(u); } catch(e) { console.warn("[voice] offer failed", u, e); }
           } else {
@@ -2540,6 +2985,7 @@ async function connectSocket() {
       renderMembersSidebar();
 
       if (voice.enabled && u && u !== myId) {
+        ensureVideoTile(u, u === myId)
         if (shouldInitiateOffer(myId, u)) {
           try { await createAndSendOffer(u); } catch(e) { console.warn("[voice] offer failed", u, e); }
         } else {
@@ -2555,24 +3001,29 @@ async function connectSocket() {
         voice.users.delete(u);
         setVS(u, { in_voice: false, muted: false, speaking: false });
         closePeer(u);
+        removeVideoTile(u);
       }
       renderMembersSidebar();
       return;
     }
 
+
     if (payload.type === "voice_signal") {
       const from = payload.from;
       const data = payload.data || {};
-      if (!voice.enabled) {
-        // If you want “auto-answer” even when not joined, remove this guard.
-        return;
-      }
+      if (!voice.enabled) return;
       if (!from || from === myId) return;
 
       try {
         if (data.kind === "offer") await handleIncomingOffer(from, data.sdp);
         else if (data.kind === "answer") await handleIncomingAnswer(from, data.sdp);
         else if (data.kind === "ice") await handleIncomingIce(from, data.candidate);
+        else if (data.kind === "renegotiate") {
+          // Only the deterministic offerer should respond by making an offer
+          if (shouldInitiateOffer(myId, from)) {
+            await createAndSendOffer(from);
+          }
+        }
       } catch (e) {
         console.warn("[voice] signal handling failed", from, data.kind, e);
       }
@@ -2734,8 +3185,6 @@ async function connectSocket() {
       list.appendChild(row);
     });
   }
-
-
 
   async function ensureDefaultRoom() {
     let rid = localStorage.getItem('room_id');
@@ -2943,6 +3392,95 @@ async function connectSocket() {
       document.getElementById('settingsMsg').textContent = String(e.message || e);
     }
   };
+
+  document.getElementById('audioBtn').onclick = async () => {
+    // Ensure we have permission at least once so labels appear.
+    try {
+      if (!voice.localStream) {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    } catch(e) {
+      // user may decline; still show modal (device labels may be blank)
+    }
+
+    const savedMic = localStorage.getItem('mic_device_id') || '';
+    const savedSpk = localStorage.getItem('spk_device_id') || '';
+    const savedGain = parseFloat(localStorage.getItem('mic_gain') || '1');
+
+    document.getElementById('micGain').value = String(savedGain);
+    document.getElementById('micGainVal').textContent = `${savedGain.toFixed(2)}x`;
+
+    const { mics, spks } = await listDevices();
+    fillSelect(document.getElementById('micSelect'), mics, savedMic);
+    fillSelect(document.getElementById('spkSelect'), spks, savedSpk);
+
+    // Hide speaker select if unsupported
+    const anySink = Array.from(voice.sinks.values())[0];
+    if (!supportsSetSinkId(anySink)) {
+      document.getElementById('spkSelect').innerHTML = '';
+    }
+
+    document.getElementById('audioModal').style.display = 'block';
+  };
+
+  document.getElementById('applyAudio').onclick = async () => {
+    const micId = document.getElementById('micSelect').value || '';
+    const spkId = document.getElementById('spkSelect').value || '';
+    const gain  = parseFloat(document.getElementById('micGain').value || '1');
+    const echo  = document.getElementById('optEcho').checked;
+    const noise = document.getElementById('optNoise').checked;
+    const agc   = document.getElementById('optAgc').checked;
+
+    localStorage.setItem('mic_device_id', micId);
+    localStorage.setItem('spk_device_id', spkId);
+    localStorage.setItem('mic_gain', String(gain));
+    localStorage.setItem('opt_echo', String(echo));
+    localStorage.setItem('opt_noise', String(noise));
+    localStorage.setItem('opt_agc', String(agc));
+
+    try {
+      // Rebuild outgoing audio stream and swap tracks live if in voice
+      const out = await buildOutgoingAudioStream({ micDeviceId: micId, echo, noise, agc, gain });
+      voice.localStream = out;
+
+      if (voice.enabled) {
+        const newTrack = out.getAudioTracks()[0];
+        await replaceOutgoingAudioTrackOnPeers(newTrack);
+
+        // honor mute state
+        newTrack.enabled = !voice.muted;
+      }
+
+      // Apply speaker output selection to every remote audio element
+      for (const el of voice.sinks.values()) {
+        if (supportsSetSinkId(el) && spkId) {
+          try { await el.setSinkId(spkId); } catch(e) {}
+        }
+      }
+
+      document.getElementById('audioMsg').textContent = 'Applied.';
+    } catch (e) {
+      console.error(e);
+      document.getElementById('audioMsg').textContent = 'Failed to apply audio settings. See console.';
+    }
+  };
+
+  document.getElementById('closeAudio').onclick = () => {
+    document.getElementById('audioModal').style.display = 'none';
+  };
+
+  document.getElementById('micGain').addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    document.getElementById('micGainVal').textContent = `${v.toFixed(2)}x`;
+  });
+
+  document.getElementById('cameraBtn').onclick = () => startCamera().catch(e => {
+    console.error(e);
+    alert('Camera failed. Check permissions and HTTPS.');
+  });
+
+  document.getElementById('camOffBtn').onclick = () => stopCamera();
+
 
   document.getElementById('submitButton').onclick = () => {
     const input = document.getElementById('inputText');

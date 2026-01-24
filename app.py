@@ -285,14 +285,17 @@ class ConnectionManager:
                 return ws
         return None
     
-    def set_voice_state(self, room_id: str, username: str, *, muted: Optional[bool]=None, speaking: Optional[bool]=None):
+    def set_voice_state(self, room_id: str, username: str, *, muted=None, speaking=None, video=None):
         room = self.voice_states.setdefault(room_id, {})
-        st = room.setdefault(username, {"muted": False, "speaking": False, "ts": None})
+        st = room.setdefault(username, {"muted": False, "speaking": False, "video": False, "ts": None})
         if muted is not None:
             st["muted"] = bool(muted)
         if speaking is not None:
             st["speaking"] = bool(speaking)
+        if video is not None:
+            st["video"] = bool(video)
         st["ts"] = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
 
     def clear_voice_state(self, room_id: str, username: str):
         room = self.voice_states.get(room_id)
