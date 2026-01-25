@@ -166,7 +166,7 @@ class ConnectionManager:
                 dead.append(ws)
 
         for ws in dead:
-            self.disconnect(ws)
+            await self.cleanup_disconnect(ws)
 
     async def broadcast(self, payload: Dict[str, Any], exclude: WebSocket = None):
         text = json.dumps(payload)
@@ -182,7 +182,7 @@ class ConnectionManager:
                 dead.append(ws)
 
         for ws in dead:
-            self.disconnect(ws)
+            await self.cleanup_disconnect(ws)
 
     async def broadcast_presence_snapshot_room(self, room_id: str):
         await self.broadcast_room(room_id, {
@@ -196,6 +196,24 @@ class ConnectionManager:
             "user": username,
             "status": status,
         })
+
+    async def cleanup_disconnect(self, websocket: WebSocket):
+        """
+        Remove websocket and broadcast offline presence to its room.
+        Safe to call multiple times.
+        """
+        meta = self.disconnect(websocket)
+        if not meta:
+            return
+
+        room_id = meta.get("room_id")
+        username = meta.get("username")
+        if room_id and username:
+            # tell others this user is now offline
+            await self.broadcast_presence_change_room(room_id, username, "offline")
+
+            # optional: also refresh snapshot for consistency
+            await self.broadcast_presence_snapshot_room(room_id)
 
     def store_message(self, msg: Dict[str, Any]):
         """
@@ -285,7 +303,7 @@ class ConnectionManager:
                 return ws
         return None
     
-    def set_voice_state(self, room_id: str, username: str, *, muted=None, speaking=None, video=None):
+    def set_voice_state(self, room_id: str, username: str, *, muted=None, speaking=None, video=None, screen=None):
         room = self.voice_states.setdefault(room_id, {})
         st = room.setdefault(username, {"muted": False, "speaking": False, "video": False, "ts": None})
         if muted is not None:
@@ -294,6 +312,8 @@ class ConnectionManager:
             st["speaking"] = bool(speaking)
         if video is not None:
             st["video"] = bool(video)
+        if screen is not None:
+            st["screen"] = bool(screen)
         st["ts"] = _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -1599,6 +1619,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     "speaking": speaking if speaking is not None else None,
                 }, exclude=None)
 
+            elif data.get("type") == "voice_state":
+                muted = data.get("muted")
+                speaking = data.get("speaking")
+                video = data.get("video")
+                screen = data.get("screen")
+
+                connectionmanager.set_voice_state(room_id, username, muted=muted, speaking=speaking, video=video, screen=screen)
+
+                await connectionmanager.broadcast_room(room_id, {
+                    "type": "voice_state",
+                    "user": username,
+                    "muted": muted,
+                    "speaking": speaking,
+                    "video": video,
+                    "screen": screen,
+                })
 
 
             else:

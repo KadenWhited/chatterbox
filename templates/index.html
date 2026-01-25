@@ -18,6 +18,10 @@
       --composer-height:84px;
       --header-height:52px;
       --stage-height: 0px;
+      --typing-height: 0px;
+      --msg-font-size: 15px;
+      --msg-gap: 12px;
+      --group-gap: 2px;
     }
 
     html,body {
@@ -58,7 +62,7 @@
       left: 0;
       right: 260px;
       top: calc(var(--header-height) + var(--stage-height));
-      bottom: calc(var(--composer-height) + 12px);
+      bottom: calc(var(--composer-height) + var(--typing-height) + 12px);
       padding: 12px;
       overflow: auto;
     }
@@ -68,61 +72,238 @@
 
     .status-line { font-size:13px; color:var(--muted); margin-bottom:6px; }
 
-    .messages { display:flex; flex-direction:column; gap:8px; }
+    .messages { display:flex; flex-direction:column; gap: 0; padding-right: 64px; }
 
-    /* Message */
-    .message {
+    /* default spacing between messages */
+    .message + .message{
+      margin-top: var(--msg-gap);
+    }
+
+    /* grouped messages: basically a newline */
+    .message.continuation{
+      margin-top: var(--group-gap);  /* set this to 0px or 1px */
+    }
+
+    /* Messages */
+    .message{
       display:flex;
       gap:10px;
       align-items:flex-start;
-      background: linear-gradient(180deg, rgba(255,255,255,0.005), rgba(255,255,255,0.002));
-      padding:8px;
-      border-radius:8px;
-      border:1px solid rgba(255,255,255,0.02);
+
+      background: transparent;
+      border: none;
+      border-radius: 0;
+
+      padding: 4px 8px;        /* base row padding */
       position:relative;
     }
-    .avatar { width:40px; height:40px; border-radius:50%; background:var(--subtle); color:var(--text); display:flex; align-items:center; justify-content:center; font-weight:700; }
+
+    /* subtle row highlight on hover */
+    .message:hover{
+      background: rgba(255,255,255,0.03);
+      filter: none;
+      transform: none;
+      transition: background 120ms ease;
+      cursor: default;
+    }
+
+    .avatar { width:36px; height:36px; border-radius:50%; background:var(--subtle); color:var(--text); display:flex; align-items:center; justify-content:center; font-weight:700; }
     .avatar.small { width:32px; height:32px; font-size:12px; }
 
-    .message-body { flex:1; min-width:0; }
+    .message-body { flex:1; min-width:0; padding-right: 92px; }
     .meta { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); margin-bottom:6px; }
     .meta .name { color:var(--text); font-weight:600; }
     .meta .time { color:var(--muted); font-size:12px; }
 
     .edited { color:var(--muted); font-size:12px; margin-left:6px; font-style:italic; }
 
-    .content { color:var(--text); line-height:1.35; word-break:break-word; }
+    .content { color:var(--text); line-height:1.35; word-break:break-word; font-size: var(--msg-font-size); }
+
+    /* Marked/HTML defaults add margins (especially <p>) — remove them */
+    .content p{
+      margin: 0;
+    }
+
+    /* Keep block elements from injecting extra vertical space */
+    .content > *{
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+
+    /* If you want lists/quotes to still have a little spacing, add it back explicitly */
+    .content ul,
+    .content ol{
+      margin: 2px 0 0 18px;
+    }
+
+    .content blockquote,
+    .content pre{
+      margin: 4px 0;
+    }
+
 
     .quote { background:#0c0d0f; padding:6px; border-left:3px solid #222; margin-bottom:6px; color:var(--muted); border-radius:6px; }
 
-    /* Reactions stay visible — actions hide into menu */
-    .reactions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
-    .reactions button { color:var(--text); border:1px solid rgba(255,255,255,0.03); padding:4px 6px; border-radius:6px; cursor:pointer; background:transparent; }
+    .inline-edit{
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      max-width: var(--msg-max-ch);
+    }
 
+    .inline-edit textarea{
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.06);
+      color: var(--text);
+      background: rgba(0,0,0,0.12);
+      outline: none;
+      font-family: inherit;
+      font-size: var(--msg-font-size);
+      line-height: 1.35;
+    }
+
+    .inline-edit .edit-actions{
+      display:flex;
+      justify-content:flex-end;
+      gap:8px;
+    }
+
+
+    /* Reactions stay visible — actions hide into menu */
+    .reactions button { color:var(--text); border:1px solid rgba(255,255,255,0.03); padding:4px 6px; border-radius:6px; cursor:pointer; background:transparent; }
+    
+    /* --- Discord-like grouping --- */
+    .message.continuation{
+      background: transparent;
+      border: none;
+      padding: 2px 8px;
+      padding-top: 0;
+      padding-bottom: 0;
+      padding-left: 54px
+    }
+    .message.continuation:hover{
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+      transition: filter 120ms ease, transform 120ms ease;
+      background: rgba(255,255,255,0.03);
+    }
+    .message.continuation .avatar{
+      display:none;
+    }
+
+    .avatar.ghost{
+      visibility: hidden; /* keeps alignment */
+    }
+    .meta.hidden{
+      display:none;
+    }
+
+    /* "+" only on hover unless message already has reactions */
+    .add-react-btn{
+      display:none;
+    }
+    .message:hover .add-react-btn{
+      display:inline-block;
+    }
+    .message.has-reactions .add-react-btn{
+      display:inline-block;
+    }
+
+    /* --- Reaction tooltip (who reacted) --- */
+    .reaction-tooltip{
+      position: fixed;
+      z-index: 20001;
+      max-width: 320px;
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 6px 8px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+      font-size: 12px;
+      line-height: 1.35;
+      pointer-events: none;
+      white-space: normal;
+    }
+    .reaction-btn{
+      color:var(--text);
+      border:1px solid rgba(255,255,255,0.03);
+      padding:4px 6px;
+      border-radius:6px;
+      cursor:pointer;
+      background:transparent;
+    }
+
+    /* --- Top-right toolbar (reactions + ellipsis) --- */
+    .msg-toolbar{
+      position:absolute;
+      top:6px;
+      right:6px;
+      display:flex;
+      align-items:center;
+      gap:6px;
+
+      opacity:0;
+      transform: translateY(-2px);
+      pointer-events:none;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    /* Show toolbar when hovering OR when message has reactions */
+    .message:hover .msg-toolbar,
+    .message.has-reactions .msg-toolbar{
+      opacity:1;
+      transform:none;
+      pointer-events:auto;
+    }
+
+    .reactions-inline{
+      display:flex;
+      gap:6px;
+      align-items:center;
+    }
+
+    /* Compact reaction pills */
+    .reactions-inline .reaction-btn,
+    .reactions-inline .add-react-btn{
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(17,18,22,0.75);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+
+    /* Hide + unless hover OR has reactions */
+    .reactions-inline .add-react-btn{ display:none; }
+    .message:hover .reactions-inline .add-react-btn{ display:inline-block; }
+    .message.has-reactions .reactions-inline .add-react-btn{ display:inline-block; }
 
     /* Actions under message are hidden (moved into contextual menu) */
     .message .msg-actions { display:none; }
 
     /* ellipsis button appears on hover */
-    .msg-menu-btn {
-      display:none;
-      position:absolute;
-      right:8px;
-      top:8px;
-      background:transparent;
-      border:none;
-      color:var(--muted);
-      font-size:18px;
-      cursor:pointer;
+    .msg-menu-btn{
+      display:inline-block;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
     }
-    .message:hover .msg-menu-btn { display:inline-block; }
-
-    /* lighten message slightly on hover so cursor movement is visible */
-    .message:hover {
-      filter: brightness(1.06);
-      transform: translateY(-1px);
-      transition: filter 120ms ease, transform 120ms ease;
-      cursor: default;
+    .msg-menu-btn:hover{
+      background: rgba(255,255,255,0.03);
     }
 
     /* Context menu styling */
@@ -167,14 +348,43 @@
     }
     .composer-left, .composer-right { display:flex; gap:8px; align-items:center; }
     .composer-middle { flex:1; }
-    #inputText { width:100%; height:100%; resize:none; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.03); color:var(--text); outline:none; background:transparent; }
+    #inputText { 
+      width:100%; 
+      height:100%; 
+      resize:none; 
+      padding:10px; 
+      border-radius:8px; 
+      border:1px solid rgba(255,255,255,0.03); 
+      color:var(--text); 
+      outline:none; 
+      background:transparent; 
+
+      font-family: inherit;
+      font-size: var(--msg-font-size);
+      line-height: 1.35;
+    }
+
+    #typingLine {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: calc(var(--composer-height) + 8px);
+      z-index: 41;
+      color: var(--muted);
+      font-size: 12px;
+      pointer-events: none; /* don’t intercept clicks */
+      background: rgba(17,18,22,0.65);
+      padding: 4px 8px;
+      border-radius: 8px;
+      display: inline-block;
+    }
 
     /* pinned reply box just above composer */
     .reply-box, #replyBox {
       position:fixed;
       left:12px;
       right:12px;
-      bottom: calc(var(--composer-height) + 10px);
+      bottom: calc(var(--composer-height) + var(--typing-height) + 10px);
       background: var(--panel);
       padding:8px 12px;
       border-radius:8px;
@@ -347,6 +557,80 @@
       overflow: auto;
     }
 
+    #screenStage {
+      display: none;
+      grid-template-columns: 2fr 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    #screenStage.theatre {
+      display: grid;
+    }
+
+    .stage-col-primary { min-width: 0; }
+    .stage-col-side {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      overflow: auto;
+      max-height: 280px;
+    }
+
+    .stage-tile {
+      user-select: none;
+    }
+
+    .stage-tile .tile-box {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .tile-controls {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      gap: 6px;
+      z-index: 5;
+    }
+
+    .tile-controls button,
+    .tile-controls input[type="range"] {
+      background: rgba(15,17,21,0.55);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+
+    .tile-controls input[type="range"] {
+      width: 110px;
+      padding: 0 6px;
+    }
+
+    #incomingCallBanner{
+      position: fixed;
+      left: 12px;
+      right: calc(260px + 12px); /* keep sidebar clear */
+      top: calc(var(--header-height) + 10px);
+      z-index: 20000;
+      background: rgba(17,18,22,0.92);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+      backdrop-filter: blur(6px);
+    }
+    #incomingCallBanner .ic-title{ font-weight: 700; }
+    #incomingCallBanner .ic-sub{ color: var(--muted); font-size: 12px; margin-top: 2px; }
+    #incomingCallBanner .ic-right{ display:flex; gap:8px; align-items:center; }
     </style>
 </head>
 
@@ -376,21 +660,37 @@
         <div id="membersList" style="display:grid; gap:8px;"></div>
       </div>
 
-
       <div class="header-right">
         <button id="voiceBtn" class="btn-small">Voice</button>
         <button id="muteBtn" class="btn-small" style="display:none;">Mute</button>
+        <button id="deafenBtn" class="btn-small" style="display:none;">Deafen</button>
 
-        <button id="audioBtn" class="btn-small">Audio</button>
-
-        <button id="cameraBtn" class="btn-small">Camera</button>
+        <button id="cameraBtn" class="btn-small" style="display:none;">Camera</button>
         <button id="camOffBtn" class="btn-small" style="display:none;">Stop Cam</button>
 
+        <button id="shareBtn" class="btn-small" style="display:none;">Share Screen</button>
+        <button id="stopShareBtn" class="btn-small" style="display:none;">Stop Share</button>
+
+        <select id="shareQuality" class="btn-small" title="Share quality" style="display:none;">
+          <option value="source">Source</option>
+          <option value="1080p">1080p</option>
+          <option value="720p" selected>720p</option>
+          <option value="480p">480p</option>
+        </select>
+
+        <select id="shareFps" class="btn-small" title="Share FPS" style="display:none;">
+          <option value="60">60</option>
+          <option value="30" selected>30</option>
+          <option value="15">15</option>
+        </select>
+
+
         <button id="viewPinsBtn" class="btn-small">Pins</button>
-        <button id="roomsBtn" class="btn-small">Rooms</button>
         <button id="inviteBtn" class="btn-small">Invite</button>
+        <button id="audioBtn" class="btn-small">Audio</button>
+        <button id="roomsBtn" class="btn-small">Rooms</button>
         <button id="settingsBtn" class="btn-small">Settings</button>
-        <button id="connectBtn" class="btn-small">Connect</button>
+        <button id="connectBtn" class="btn-small" style="display:none">Connect</button>
         <button id="logoutBtn" class="btn-small">Logout</button>
       </div>
 
@@ -481,9 +781,18 @@
     <main class="chat-wrapper">
       <div id="status" class="status-line"></div>
       <div id="presenceLine" class="presenceLine"></div>
-      <div id="typingLine" class="typingLine"></div>
       <div id="container" class="messages"></div>
     </main>
+
+    <div id="screenStage" style="
+      position:fixed; left:0; right:260px;
+      top:var(--header-height); height:280px;
+      gap:8px; padding:8px;
+      background:rgba(0,0,0,0.18);
+      z-index:34; overflow:hidden;">
+      <div class="stage-col-primary" id="screenPrimary"></div>
+      <div class="stage-col-side" id="screenSide"></div>
+    </div>
 
     <div id="videoStage" style="
       position:fixed; left:0; right:260px;
@@ -502,6 +811,7 @@
       <div id="pinsContainer" class="pins-body"></div>
     </div>
 
+    <div id="typingLine" class="typingLine"></div>
 
     <!-- Reply preview small area above composer -->
     <div id="replyBox" class="reply-box" style="display:none;">
@@ -528,6 +838,22 @@
     <div id="gifPicker" style="display:none; position:fixed;"></div>
 
     <div id="voiceAudioSinks" style="display:none;"></div>
+
+    <!-- Ringtone (put a real file at this path, or change the src) -->
+    <audio id="ringTone" src="/static/sounds/ring.mp3" preload="auto" loop></audio>
+
+    <!-- Incoming call banner -->
+    <div id="incomingCallBanner" style="display:none;">
+      <div class="ic-left">
+        <div class="ic-title">Incoming call</div>
+        <div class="ic-sub" id="incomingCallFrom">Someone is calling…</div>
+      </div>
+      <div class="ic-right">
+        <button id="icAccept" class="btn-primary">Join</button>
+        <button id="icDismiss" class="btn-small">Dismiss</button>
+      </div>
+    </div>
+
   </div>
 
 
@@ -558,6 +884,8 @@
   let lastSentSpeaking = null;
   let lastSpeakingFlipAt = 0;
 
+  let soundUnlocked = false;
+  let incomingFromUser = null;
 
   const voice = {
     enabled: false,
@@ -568,8 +896,99 @@
     users: new Set(),        // usernames currently in voice (from server snapshot + join/leave)
   };
 
+  // --- Client-side audio controls (viewer-side) ---
+  const audioPrefs = {
+    deafened: false,                 // global "I hear nothing"
+    mutedUsers: new Set(),           // usernames muted client-side
+    userVolumes: new Map(),          // username -> volume (0..1)
+  };
+
+  function unlockSoundsOnce() {
+    if (soundUnlocked) return;
+    soundUnlocked = true;
+
+    // Try to “warm up” the audio element to satisfy autoplay policies after a user gesture.
+    const a = document.getElementById('ringTone');
+    if (a) {
+      a.volume = 0.7;
+      a.play().then(() => {
+        a.pause();
+        a.currentTime = 0;
+      }).catch(() => {});
+    }
+  }
+
+  // Optional persistence
+  function loadAudioPrefs() {
+    try {
+      const j = JSON.parse(localStorage.getItem('audio_prefs') || '{}');
+      audioPrefs.deafened = !!j.deafened;
+      audioPrefs.mutedUsers = new Set(Array.isArray(j.mutedUsers) ? j.mutedUsers : []);
+      audioPrefs.userVolumes = new Map(Object.entries(j.userVolumes || {}).map(([k,v]) => [k, Number(v)]));
+    } catch(e) {}
+  }
+  function saveAudioPrefs() {
+    try {
+      const obj = {
+        deafened: audioPrefs.deafened,
+        mutedUsers: Array.from(audioPrefs.mutedUsers),
+        userVolumes: Object.fromEntries(audioPrefs.userVolumes.entries()),
+      };
+      localStorage.setItem('audio_prefs', JSON.stringify(obj));
+    } catch(e) {}
+  }
+
+  // Apply prefs to one user's sink (and keep it consistent)
+  function applyAudioPrefsToSink(username) {
+    const el = voice.sinks.get(username);
+    if (!el) return;
+
+    const userMuted = audioPrefs.mutedUsers.has(username);
+    const vol = audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1;
+
+    // Deafen overrides everything
+    el.muted = audioPrefs.deafened || userMuted;
+    el.volume = clamp(vol, 0, 1);
+  }
+
+  // Apply prefs to all sinks
+  function applyAudioPrefsToAllSinks() {
+    for (const u of voice.sinks.keys()) applyAudioPrefsToSink(u);
+  }
+
+  // Toggle per-user mute (client-side)
+  function toggleUserMute(username) {
+    if (!username || username === myId) return;
+    if (audioPrefs.mutedUsers.has(username)) audioPrefs.mutedUsers.delete(username);
+    else audioPrefs.mutedUsers.add(username);
+
+    saveAudioPrefs();
+    applyAudioPrefsToSink(username);
+    renderMembersSidebar();
+  }
+
+  // Set per-user volume (client-side)
+  function setUserVolume(username, v) {
+    audioPrefs.userVolumes.set(username, clamp(v, 0, 1));
+    saveAudioPrefs();
+    applyAudioPrefsToSink(username);
+  }
+
+  // Toggle global deafen
+  function toggleDeafen() {
+    audioPrefs.deafened = !audioPrefs.deafened;
+    saveAudioPrefs();
+    applyAudioPrefsToAllSinks();
+    updateVoiceButtons();
+    renderMembersSidebar();
+  }
+
+
   window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chat'});
   window.addEventListener('blur', () => { windowFocused = false; });
+
+  window.addEventListener('pointerdown', unlockSoundsOnce, { once: true });
+  window.addEventListener('keydown', unlockSoundsOnce, { once: true });
 
   async function fetchRoomMessagesPage(roomId, before=null, limit=50) {
     const token = getToken();
@@ -622,19 +1041,16 @@
   function getBottomSafeY() {
     const composer = document.getElementById('composer');
     const replyBox = document.getElementById('replyBox');
+    const typingLine = document.getElementById('typingLine');
 
     let bottom = window.innerHeight - 8;
 
-    if (composer) {
-      bottom = Math.min(bottom, composer.getBoundingClientRect().top - 10);
-    }
-    // if reply box is visible, keep picker above it too
-    if (replyBox && replyBox.style.display !== 'none') {
-      bottom = Math.min(bottom, replyBox.getBoundingClientRect().top - 10);
-    }
+    if (composer) bottom = Math.min(bottom, composer.getBoundingClientRect().top - 10);
+    if (typingLine && typingLine.innerHTML.trim()) bottom = Math.min(bottom, typingLine.getBoundingClientRect().top - 10);
+    if (replyBox && replyBox.style.display !== 'none') bottom = Math.min(bottom, replyBox.getBoundingClientRect().top - 10);
+
     return bottom;
   }
-
 
   function getTopSafeY() {
     const header = document.getElementById('appHeader');
@@ -712,6 +1128,54 @@
     // Keep the user at the same visible content position
     const newScrollHeight = wrapper.scrollHeight;
     wrapper.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+  }
+
+  function showIncomingBanner(fromUsername) {
+    const b = document.getElementById('incomingCallBanner');
+    const t = document.getElementById('incomingCallFrom');
+    if (!b || !t) return;
+
+    const display = displayNameForUser(fromUsername) || fromUsername || 'Someone';
+    t.textContent = `${display} is calling…`;
+    b.style.display = 'flex';
+  }
+
+  function hideIncomingBanner() {
+    const b = document.getElementById('incomingCallBanner');
+    if (b) b.style.display = 'none';
+  }
+
+  function startRingtone(fromUsername) {
+    if (incomingFromUser) return; // already ringing
+    incomingFromUser = fromUsername || 'someone';
+
+    showIncomingBanner(incomingFromUser);
+
+    // Optional: also use browser notifications when unfocused
+    if (!windowFocused && 'Notification' in window && Notification.permission === 'granted') {
+      const display = displayNameForUser(incomingFromUser) || incomingFromUser;
+      new Notification('Incoming call', { body: `${display} started a voice call.` });
+    }
+
+    // Play ringtone (may require user gesture; that’s why we unlockSoundsOnce)
+    const a = document.getElementById('ringTone');
+    if (a) {
+      a.currentTime = 0;
+      a.play().catch(() => {
+        // If blocked, the banner still shows; user can click Join which unlocks audio anyway.
+      });
+    }
+  }
+
+  function stopRingtone() {
+    incomingFromUser = null;
+    hideIncomingBanner();
+
+    const a = document.getElementById('ringTone');
+    if (a) {
+      try { a.pause(); } catch(e) {}
+      a.currentTime = 0;
+    }
   }
 
   function getVS(username) {
@@ -1069,6 +1533,8 @@
     holder.appendChild(el);
 
     voice.sinks.set(username, el);
+
+    applyAudioPrefsToSink(username);
     return el;
   }
 
@@ -1128,8 +1594,17 @@
 
       if (ev.track.kind === 'audio') {
         const sink = ensureAudioSink(peerUsername);
-        sink.srcObject = stream;
-        // apply chosen output device if supported
+
+        // Maintain a single MediaStream per peer sink and append tracks into it.
+        let ms = sink.srcObject instanceof MediaStream ? sink.srcObject : null;
+        if (!ms) {
+          ms = new MediaStream();
+          sink.srcObject = ms;
+        }
+        if (!ms.getTracks().some(t => t.id === ev.track.id)) {
+          ms.addTrack(ev.track);
+        }
+
         const spkId = localStorage.getItem('spk_device_id') || '';
         if (spkId && supportsSetSinkId(sink)) {
           sink.setSinkId(spkId).catch(()=>{});
@@ -1137,23 +1612,31 @@
       }
 
       if (ev.track.kind === 'video') {
-        const tile = ensureVideoTile(peerUsername, false);
-        if (tile) {
-          tile.srcObject = stream;
-          showVideoOverlay(peerUsername, false);
+        const vs = getVS(peerUsername);
+        const isScreen = !!vs.screen; // new field
 
-          // If remote stops camera, the track often ends or mutes
-          ev.track.addEventListener('ended', () => {
-            try { tile.srcObject = null; } catch(e) {}
-            showVideoOverlay(peerUsername, true);
-          });
-          ev.track.addEventListener('mute', () => {
-            showVideoOverlay(peerUsername, true);
-          });
-          ev.track.addEventListener('unmute', () => {
+        if (isScreen) {
+          const tile = ensureScreenTile(peerUsername, false);
+          if (tile) {
+            tile.srcObject = stream;
+            showScreenOverlay(peerUsername, false);
+          }
+        } else {
+          const tile = ensureVideoTile(peerUsername, false);
+          if (tile) {
+            tile.srcObject = stream;
             showVideoOverlay(peerUsername, false);
-          });
+          }
         }
+
+        ev.track.addEventListener('ended', () => {
+          if (isScreen) {
+            showScreenOverlay(peerUsername, true);
+            removeScreenTile(peerUsername);
+          } else {
+            showVideoOverlay(peerUsername, true);
+          }
+        });
       }
     };
 
@@ -1244,6 +1727,7 @@
     document.getElementById('camOffBtn').style.display = 'inline-block';
 
     await renegotiateWithAllPeers();
+    updateCallControlsVisibility();
   }
 
 
@@ -1293,6 +1777,7 @@
 
     // Renegotiate to remove video from SDP
     renegotiateWithAllPeers().catch(()=>{});
+    updateCallControlsVisibility();
   }
 
 
@@ -1342,14 +1827,67 @@
   function updateVoiceButtons() {
     const voiceBtn = document.getElementById("voiceBtn");
     const muteBtn = document.getElementById("muteBtn");
-    if (!voiceBtn || !muteBtn) return;
+    const deafenBtn = document.getElementById("deafenBtn");
+    if (!voiceBtn || !muteBtn || !deafenBtn) return;
 
     voiceBtn.textContent = voice.enabled ? "Leave Voice" : "Voice";
     muteBtn.style.display = voice.enabled ? "inline-block" : "none";
+    deafenBtn.style.display = voice.enabled ? "inline-block" : "none";
+
     muteBtn.textContent = voice.muted ? "Unmute" : "Mute";
+    deafenBtn.textContent = audioPrefs.deafened ? "Undeafen" : "Deafen";
+    updateCallControlsVisibility();
+  }
+
+  function updateCallControlsVisibility() {
+    const cameraBtn    = document.getElementById("cameraBtn");
+    const camOffBtn    = document.getElementById("camOffBtn");
+    const shareBtn     = document.getElementById("shareBtn");
+    const stopShareBtn = document.getElementById("stopShareBtn");
+    const shareQuality = document.getElementById("shareQuality");
+    const shareFps     = document.getElementById("shareFps");
+
+    if (!cameraBtn || !camOffBtn || !shareBtn || !stopShareBtn || !shareQuality || !shareFps) return;
+
+    // Only show any of these while in voice
+    if (!voice.enabled) {
+      cameraBtn.style.display = "none";
+      camOffBtn.style.display = "none";
+      shareBtn.style.display = "none";
+      stopShareBtn.style.display = "none";
+      shareQuality.style.display = "none";
+      shareFps.style.display = "none";
+      return;
+    }
+
+    // In voice:
+    // Camera controls
+    if (video.enabled) {
+      cameraBtn.style.display = "none";
+      camOffBtn.style.display = "inline-block";
+    } else {
+      cameraBtn.style.display = "inline-block";
+      camOffBtn.style.display = "none";
+    }
+
+    // Screen share controls (mutually exclusive with camera per your logic)
+    if (screenShare.enabled) {
+      shareBtn.style.display = "none";
+      stopShareBtn.style.display = "inline-block";
+    } else {
+      shareBtn.style.display = "inline-block";
+      stopShareBtn.style.display = "none";
+    }
+
+    // Only show quality/fps controls when user can act on them (in voice and not currently sharing)
+    // (If you prefer, show these even while sharing; just remove the !screenShare.enabled condition.)
+    const showShareSettings = voice.enabled && !screenShare.enabled;
+    shareQuality.style.display = showShareSettings ? "inline-block" : "none";
+    shareFps.style.display     = showShareSettings ? "inline-block" : "none";
   }
 
   async function joinVoice() {
+    stopRingtone();
     if (voice.enabled) return;
 
     const micDeviceId = localStorage.getItem('mic_device_id') || '';
@@ -1469,6 +2007,9 @@
     }
     video.tiles.clear();
     video.overlays.clear();
+    audioPrefs.deafened = false;
+    saveAudioPrefs();
+
     setStageVisible(false);
   }
 
@@ -1484,6 +2025,166 @@
     renderMembersSidebar();
   }
 
+  async function startScreenShare(){
+    if (screenShare.enabled) return;
+    if (!voice.enabled) {
+      alert('Join Voice first. Then start screen share.');
+      return;
+    }
+
+    // If camera is active, stop it (mutually exclusive for now).
+    if (video.enabled) stopCamera();
+
+    let stream = null;
+    try {
+      const { fps, w, h } = getSharePrefs();
+
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: fps ? { ideal: fps, max: fps } : 30,
+          width:  w ? { ideal: w } : undefined,
+          height: h ? { ideal: h } : undefined,
+        },
+        audio: true   // IMPORTANT: enables “share tab audio” where supported
+      });
+    } catch(e) {
+      alert('Screen share was blocked or cancelled.\n\nNote: requires HTTPS or localhost.');
+      return;
+    }
+
+    const { kbps } = getSharePrefs();
+    const vtrack = stream.getVideoTracks()[0];
+    if (vtrack) {
+      try {
+        const { fps, w, h } = getSharePrefs();
+        await vtrack.applyConstraints({
+          frameRate: fps ? { ideal: fps, max: fps } : undefined,
+          width:  w ? { ideal: w } : undefined,
+          height: h ? { ideal: h } : undefined,
+        });
+      } catch(e) {}
+    }
+
+    // Apply bitrate cap per peer sender
+    for (const [, pc] of voice.pcs.entries()) {
+      await applyVideoSenderParams(pc, kbps);
+    }
+
+    const track = stream.getVideoTracks()[0];
+    if (!track) return;
+
+    screenShare.localStream = stream;
+
+    const screenAudio = stream.getAudioTracks()[0] || null;
+    screenShare.audioTrack = screenAudio || null;
+
+    // Add screenshare audio as an additional audio track (mic remains separate)
+    if (screenAudio) {
+      for (const [, pc] of voice.pcs.entries()) {
+        try { pc.addTrack(screenAudio, stream); } catch(e) {}
+      }
+    }
+
+    screenShare.enabled = true;
+
+    // Notify server/UI state
+    sendVoiceState({ screen: true, video: false });
+
+    // Render local screen tile
+    const localTile = ensureScreenTile(myId, true);
+    if (localTile) {
+      localTile.srcObject = stream;
+      showScreenOverlay(myId, false);
+    }
+
+    // If user stops sharing via browser UI, clean up
+    track.onended = () => stopScreenShare();
+
+    // Replace outbound sender track on all peers (use same 'video' sender slot)
+    for (const [username, pc] of voice.pcs.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) await sender.replaceTrack(track);
+      else pc.addTrack(track, stream);
+    }
+
+    document.getElementById('shareBtn').style.display = 'none';
+    document.getElementById('stopShareBtn').style.display = 'inline-block';
+
+    await renegotiateWithAllPeers();
+    updateCallControlsVisibility();
+  }
+
+  function getSharePrefs() {
+    const q = (document.getElementById('shareQuality')?.value || '720p');
+    const fps = parseInt(document.getElementById('shareFps')?.value || '30', 10);
+
+    // conservative bitrate caps for a mesh call
+    const preset = {
+      source: { w: null,  h: null,  kbps: 3500 },
+      "1080p": { w: 1920, h: 1080, kbps: 3500 },
+      "720p":  { w: 1280, h: 720,  kbps: 1800 },
+      "480p":  { w: 854,  h: 480,  kbps: 900  },
+    }[q] || { w: 1280, h: 720, kbps: 1800 };
+
+    return { quality: q, fps, ...preset };
+  }
+
+  async function applyVideoSenderParams(pc, maxKbps) {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+    if (!sender || typeof sender.getParameters !== 'function') return;
+
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+
+    params.encodings[0].maxBitrate = Math.max(100, maxKbps) * 1000; // bps
+    try { await sender.setParameters(params); } catch (e) {}
+  }
+
+
+  function stopScreenShare(){
+    if (!screenShare.enabled) return;
+
+    if (screenShare.audioTrack) {
+      for (const [, pc] of voice.pcs.entries()) {
+        const s = pc.getSenders().find(x => x.track && x.track.id === screenShare.audioTrack.id);
+        if (s) { try { pc.removeTrack(s); } catch(e) {} }
+      }
+      screenShare.audioTrack = null;
+    }
+
+    if (screenShare.localStream) {
+      screenShare.localStream.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
+      screenShare.localStream = null;
+    }
+
+    // Clear local tile
+    const localTile = ensureScreenTile(myId, true);
+    if (localTile) {
+      try { localTile.srcObject = null; } catch(e){}
+      showScreenOverlay(myId, true);
+    }
+    removeScreenTile(myId);
+
+    screenShare.enabled = false;
+
+    sendVoiceState({ screen: false });
+
+    document.getElementById('shareBtn').style.display = 'inline-block';
+    document.getElementById('stopShareBtn').style.display = 'none';
+
+    // Remove video sender track entirely; renegotiate.
+    for (const [username, pc] of voice.pcs.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) {
+        try { pc.removeTrack(sender); } catch(e){}
+      }
+    }
+
+    renegotiateWithAllPeers().catch(()=>{});
+    updateCallControlsVisibility();
+  }
+
+
   function renderMessage(msg, isLocalEcho=false, prevMsg=null) {
   // if message flagged deleted, skip rendering (safety)
   if (msg.deleted) return document.createElement('div');
@@ -1494,10 +2195,23 @@
   wrapper.className = 'message';
   wrapper.id = 'msg-' + msg.id;
 
+  const toolbar = document.createElement('div');
+  toolbar.className = 'msg-toolbar';
+
+  const reactionsInline = document.createElement('div');
+  reactionsInline.className = 'reactions-inline';
+
+  toolbar.appendChild(reactionsInline);
+
+  // --- grouping logic (discord-like) ---
+  const grouped = isGroupedContinuation(prevMsg, msg);
+  if (grouped) wrapper.classList.add('continuation');
+
   // avatar
   const avatar = document.createElement('div');
   avatar.className = 'avatar';
   avatar.textContent = (msg.author && msg.author[0]) ? msg.author[0].toUpperCase() : '?';
+  if (grouped) avatar.classList.add('ghost');
 
   // body (meta + content)
   const body = document.createElement('div');
@@ -1505,28 +2219,38 @@
 
   const meta = document.createElement('div');
   meta.className = 'meta';
+
   const nameSpan = document.createElement('span');
   nameSpan.className = 'name';
   nameSpan.textContent = msg.author;
+
   const timeSpan = document.createElement('span');
   timeSpan.className = 'time';
-  try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent = ''; }
-  meta.appendChild(nameSpan);
-  meta.appendChild(timeSpan);
-  if (msg.edited_at) {
-    const editedSpan = document.createElement('span');
-    editedSpan.className = 'edited';
-    editedSpan.textContent = '(edited)';
-    meta.appendChild(editedSpan);
-  }
-  body.appendChild(meta);
 
-  const showTime = shouldShowTimestamp(prevMsg, msg, true);
-  if (showTime) {
-    try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent=''; } 
+    // Only show meta (name/time) on the first in a run
+  if (grouped) {
+    meta.classList.add('hidden');
+  } else {
+    meta.appendChild(nameSpan);
+
+    // timestamp visibility using your existing rule
+    const showTime = shouldShowTimestamp(prevMsg, msg, true);
+    if (showTime) {
+      try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent=''; }
     } else {
       timeSpan.textContent = '';
     }
+    meta.appendChild(timeSpan);
+
+    if (msg.edited_at) {
+      const editedSpan = document.createElement('span');
+      editedSpan.className = 'edited';
+      editedSpan.textContent = '(edited)';
+      meta.appendChild(editedSpan);
+    }
+  }
+
+  body.appendChild(meta);
 
   // --- inline reply preview (clickable) ---
   if (msg.reply_to) {
@@ -1628,26 +2352,63 @@
 
   // reactions area
   const reactionsBar = document.createElement('div');
-  reactionsBar.className = 'reactions';
-  if (msg.reactions && typeof msg.reactions === 'object') {
-    Object.entries(msg.reactions).forEach(([emoji, users]) => {
-      const rbtn = document.createElement('button');
-      rbtn.textContent = `${emoji} ${Array.isArray(users) ? users.length : 0}`;
-      rbtn.onclick = () => { if (!socket || socket.readyState !== WebSocket.OPEN) return; socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji })); };
-      reactionsBar.appendChild(rbtn);
-    });
-  }
 
+  const reactionEntries = (msg.reactions && typeof msg.reactions === 'object')
+    ? Object.entries(msg.reactions)
+    : [];
+
+  const hasReactions = reactionEntries.some(([emoji, users]) => Array.isArray(users) && users.length > 0);
+  if (hasReactions) wrapper.classList.add('has-reactions');
+
+  reactionEntries.forEach(([emoji, users]) => {
+    const list = Array.isArray(users) ? users : [];
+    if (!list.length) return;
+
+    const rbtn = document.createElement('button');
+    rbtn.className = 'reaction-btn';
+    rbtn.textContent = `${emoji} ${list.length}`;
+
+    // Hover tooltip: who reacted (display names)
+    const names = list.map(u => displayNameForUser(u));
+    const tipText = names.join(', ');
+    rbtn.title = tipText; // fallback tooltip
+
+    rbtn.addEventListener('mouseenter', (ev) => {
+      showReactionTooltip(tipText, ev.clientX, ev.clientY);
+    });
+    rbtn.addEventListener('mousemove', (ev) => {
+      showReactionTooltip(tipText, ev.clientX, ev.clientY);
+    });
+    rbtn.addEventListener('mouseleave', () => {
+      hideReactionTooltip();
+    });
+
+    // Click toggles reaction (your existing behavior)
+    rbtn.onclick = () => {
+      hideReactionTooltip();
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+    };
+
+    reactionsBar.appendChild(rbtn);
+  });
+
+  // Add reaction "+" (only visible on hover unless message already has reactions)
   const addReactBtn = document.createElement('button');
+  addReactBtn.className = 'add-react-btn';
   addReactBtn.textContent = '+';
   addReactBtn.title = 'Add reaction';
   addReactBtn.onclick = (ev) => {
+    hideReactionTooltip();
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    openEmojiPicker(addReactBtn, (emoji) => { socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji })); });
+    openEmojiPicker(addReactBtn, (emoji) => {
+      socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+    });
     ev.stopPropagation?.();
-    };
-    reactionsBar.appendChild(addReactBtn);
-    body.appendChild(reactionsBar);
+  };
+
+  reactionsInline.appendChild(addReactBtn);
+  body.appendChild(reactionsBar);
 
     // actions (pin/copy/reply/delete/edit) - keep small and unobtrusive
     const actions = document.createElement('div');
@@ -1771,13 +2532,61 @@
     });
 
     // attach the ellipsis button to wrapper (CSS shows it on hover)
-    wrapper.appendChild(menuBtn);
+    toolbar.appendChild(menuBtn);
 
-
+    wrapper.appendChild(toolbar);
     wrapper.appendChild(avatar);
     wrapper.appendChild(body);
     return wrapper;
   }
+
+  function isGroupedContinuation(prevMsg, curMsg) {
+    if (!prevMsg || !curMsg) return false;
+    if (prevMsg.author !== curMsg.author) return false;
+
+    const a = Date.parse(prevMsg.timestamp);
+    const b = Date.parse(curMsg.timestamp);
+    if (Number.isNaN(a) || Number.isNaN(b)) return false;
+
+    // "Back to back" window: 5 minutes (tweak to taste)
+    return (b - a) <= (5 * 60 * 1000);
+  }
+
+  function displayNameForUser(username){
+    const profile = userDirectory[username] || {};
+    return profile.display_name || username;
+  }
+
+  /* --- Reaction hover tooltip --- */
+  let reactionTipEl = null;
+
+  function showReactionTooltip(text, x, y) {
+    if (!reactionTipEl) {
+      reactionTipEl = document.createElement('div');
+      reactionTipEl.className = 'reaction-tooltip';
+      document.body.appendChild(reactionTipEl);
+    }
+    reactionTipEl.textContent = text;
+
+    // clamp within viewport
+    const pad = 10;
+    reactionTipEl.style.left = `${Math.min(window.innerWidth - pad, Math.max(pad, x + 12))}px`;
+    reactionTipEl.style.top  = `${Math.min(window.innerHeight - pad, Math.max(pad, y + 12))}px`;
+    reactionTipEl.style.display = 'block';
+  }
+
+  function hideReactionTooltip() {
+    if (reactionTipEl) reactionTipEl.style.display = 'none';
+    // Always hide the reaction tooltip on common state changes
+    (function wireReactionTooltipGuards(){
+      // capture-phase scroll catches scrolls in .chat-wrapper too
+      document.addEventListener('scroll', hideReactionTooltip, true);
+      window.addEventListener('blur', hideReactionTooltip);
+      document.addEventListener('click', hideReactionTooltip, true);
+    })();
+
+  }
+
 
   let voiceUIWired = false;
 
@@ -1785,6 +2594,7 @@
     if (voiceUIWired) return;
     voiceUIWired = true;
 
+    const deafenBtn = document.getElementById("deafenBtn");
     const voiceBtn = document.getElementById("voiceBtn");
     const muteBtn  = document.getElementById("muteBtn");
     if (!voiceBtn || !muteBtn) return;
@@ -1805,7 +2615,10 @@
         alert("Voice failed to start. Check mic permissions and HTTPS/localhost.");
       }
     });
-
+    deafenBtn.addEventListener("click", () => {
+      if (!voice.enabled) return;
+      toggleDeafen();
+    });
     muteBtn.addEventListener("click", () => toggleMute());
   }
 
@@ -1830,6 +2643,18 @@
     localStream: null,   // just video stream (track)
     tiles: new Map(),     // username -> HTMLVideoElement
     overlays: new Map()
+  };
+
+  const screenShare = {
+    enabled: false,
+    localStream: null,
+    tiles: new Map(),    // username -> HTMLVideoElement
+    overlays: new Map()
+  };
+
+  const stageState = {
+    primaryScreenUser: null,
+    hiddenScreens: new Set(),
   };
 
   function ensureVideoTile(username, isLocal=false) {
@@ -1930,6 +2755,220 @@
     if (stage && video.tiles.size === 0) setStageVisible(false);
   }
 
+  function setScreenStageVisible(on){
+    const st = document.getElementById('screenStage');
+    if (!st) return;
+    st.classList.toggle('theatre', !!on);
+    st.style.display = on ? 'grid' : 'none';
+  }
+
+  function setPrimaryScreen(username) {
+    stageState.primaryScreenUser = username;
+    relayoutScreenStage();
+  }
+
+  function relayoutScreenStage() {
+    const primaryHost = document.getElementById('screenPrimary');
+    const sideHost = document.getElementById('screenSide');
+    if (!primaryHost || !sideHost) return;
+
+    // Clear hosts (but keep tile DOM nodes alive by re-parenting)
+    primaryHost.innerHTML = '';
+    sideHost.innerHTML = '';
+
+    // Choose a primary if none exists but screens exist
+    const users = Array.from(screenShare.tiles.keys()).filter(u => !stageState.hiddenScreens.has(u));
+    if (!users.length) {
+      setScreenStageVisible(false);
+      stageState.primaryScreenUser = null;
+      return;
+    }
+    setScreenStageVisible(true);
+
+    if (!stageState.primaryScreenUser || !users.includes(stageState.primaryScreenUser)) {
+      stageState.primaryScreenUser = users[0];
+    }
+
+    users.forEach(u => {
+      const wrap = screenShare.wraps.get(u);
+      if (!wrap) return;
+      if (u === stageState.primaryScreenUser) primaryHost.appendChild(wrap);
+      else sideHost.appendChild(wrap);
+    });
+  }
+
+  function makeFullscreen(el) {
+    if (!el) return;
+    const doc = document;
+    if (doc.fullscreenElement) doc.exitFullscreen?.();
+    else el.requestFullscreen?.();
+  }
+
+  function ensureScreenTile(username, isLocal=false){
+    if (!voice.enabled) return null;
+
+    // init maps
+    screenShare.wraps = screenShare.wraps || new Map();
+
+    let el = screenShare.tiles.get(username);
+    if (el) return el;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'stage-tile';
+    wrap.dataset.user = username;
+
+    // Click tile to promote to primary (theatre mode)
+    wrap.addEventListener('click', (ev) => {
+      // avoid stealing clicks from controls
+      const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+      if (tag === 'button' || tag === 'input') return;
+      setPrimaryScreen(username);
+    });
+
+    const box = document.createElement('div');
+    box.className = 'tile-box';
+    box.style.width = '100%';
+    box.style.height = '260px';
+
+    el = document.createElement('video');
+    el.autoplay = true;
+    el.playsInline = true;
+    el.muted = !!isLocal;          // local always muted
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.objectFit = 'contain';
+    el.style.display = 'block';
+
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.inset = '0';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.background = '#0b0c0e';
+    overlay.style.color = 'var(--muted)';
+    overlay.style.fontSize = '13px';
+    overlay.textContent = 'No screen stream';
+
+    // Controls (viewer-side)
+    const controls = document.createElement('div');
+    controls.className = 'tile-controls';
+
+    const fsBtn = document.createElement('button');
+    fsBtn.textContent = '⤢';
+    fsBtn.title = 'Fullscreen';
+    fsBtn.onclick = (e) => { e.stopPropagation(); makeFullscreen(box); };
+
+    const hideBtn = document.createElement('button');
+    hideBtn.textContent = 'Hide';
+    hideBtn.title = 'Hide this stream';
+    hideBtn.onclick = (e) => {
+      e.stopPropagation();
+      stageState.hiddenScreens.add(username);
+      relayoutScreenStage();
+    };
+
+    controls.appendChild(fsBtn);
+
+    // Only show volume/mute controls for remote streams
+    if (!isLocal) {
+      const muteUserBtn = document.createElement('button');
+      const syncText = () => {
+        const isUserMuted = audioPrefs.mutedUsers.has(username);
+        muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
+      };
+      syncText();
+      muteUserBtn.title = 'Client-side: mute everything you hear from this user';
+      muteUserBtn.onclick = (e) => {
+        e.stopPropagation();
+        toggleUserMute(username);
+        syncText();
+      };
+      controls.appendChild(muteUserBtn);
+
+      // Optional: keep your existing video-element mute as "Mute Video Element"
+      const muteStreamBtn = document.createElement('button');
+      muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
+      muteStreamBtn.title = 'Mute the <video> element (may not affect audio sink)';
+      muteStreamBtn.onclick = (e) => {
+        e.stopPropagation();
+        el.muted = !el.muted;
+        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
+      };
+      controls.appendChild(muteStreamBtn);
+
+      const vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.value = String(audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1);
+      vol.title = 'User volume (client-side)';
+      vol.oninput = (e) => {
+        e.stopPropagation();
+        setUserVolume(username, parseFloat(vol.value));
+      };
+      controls.appendChild(vol);
+
+      if (audioPrefs.deafened) {
+        muteUserBtn.disabled = true;
+        muteStreamBtn.disabled = true;
+        vol.disabled = true;
+      }
+    }
+
+
+    controls.appendChild(hideBtn);
+
+    box.appendChild(el);
+    box.appendChild(overlay);
+    box.appendChild(controls);
+
+    const label = document.createElement('div');
+    label.textContent = `${username} (Screen)`;
+    label.style.color = 'var(--muted)';
+    label.style.fontSize = '12px';
+    label.style.marginTop = '6px';
+
+    wrap.appendChild(box);
+    wrap.appendChild(label);
+
+    screenShare.tiles.set(username, el);
+    screenShare.overlays.set(username, overlay);
+    screenShare.wraps.set(username, wrap);
+
+    overlay.style.display = 'flex';
+
+    // Ensure stage visible and laid out
+    setScreenStageVisible(true);
+    relayoutScreenStage();
+
+    return el;
+  }
+
+
+  function showScreenOverlay(username, show){
+    const ov = screenShare.overlays.get(username);
+    if (!ov) return;
+    ov.style.display = show ? 'flex' : 'none';
+  }
+
+  function removeScreenTile(username){
+    const wrap = screenShare.wraps?.get(username);
+    if (wrap) { try { wrap.remove(); } catch(e){} }
+
+    screenShare.wraps?.delete(username);
+
+    const el = screenShare.tiles.get(username);
+    if (el) screenShare.tiles.delete(username);
+    screenShare.overlays.delete(username);
+
+    stageState.hiddenScreens.delete(username);
+    if (stageState.primaryScreenUser === username) stageState.primaryScreenUser = null;
+
+    relayoutScreenStage();
+  }
+
   const onlineUsers = new Set();
 
   const typingUsers = new Set();
@@ -1942,17 +2981,47 @@
     const el = document.getElementById("presenceLine");
     if (!el) return;
     const arr = Array.from(onlineUsers).sort();
+
     el.textContent = arr.length ? ("Online: " + arr.join(", ")) : "No one online";
   }
 
   function renderTyping() {
     const el = document.getElementById("typingLine");
     if (!el) return;
-    const arr = Array.from(typingUsers).sort();
-    if (!arr.length) { el.textContent = ""; return; }
 
-    el.innerHTML = arr.map(u => `<div>#{u} is typing...</div>`).join('')
+    const arr = Array.from(typingUsers).sort();
+    if (!arr.length) {
+      el.textContent = "";
+      syncTypingHeightVar();
+      return;
+    }
+
+    el.innerHTML = arr.map(u => {
+      const profile = userDirectory[u] || {};
+      const name = profile.display_name || u;
+      return `<div>${name} is typing...</div>`;
+    }).join('');
+
+    syncTypingHeightVar();
   }
+
+  function syncTypingHeightVar() {
+    const el = document.getElementById("typingLine");
+    if (!el) return;
+
+    // If empty, collapse.
+    if (!el.textContent.trim() && !el.innerHTML.trim()) {
+      document.documentElement.style.setProperty('--typing-height', '0px');
+      return;
+    }
+
+    // Measure after layout
+    requestAnimationFrame(() => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      document.documentElement.style.setProperty('--typing-height', `${Math.min(h, 72)}px`);
+    });
+  }
+
 
   function setUserTyping(user, isTyping) {
     if (!user) return;
@@ -2013,6 +3082,7 @@
 
   // on page load, try auto-login if token + username exist
   window.addEventListener('DOMContentLoaded', () => {
+    loadAudioPrefs();
     setupVoiceUI();
 
     const token = getToken();
@@ -2024,6 +3094,27 @@
       connectSocket();        // will show chatUI on successful WS open
     } else {
       showAuthUI();
+    }
+
+    // Ringtone Handler
+    const accept = document.getElementById('icAccept');
+    const dismiss = document.getElementById('icDismiss');
+
+    if (accept) {
+      accept.onclick = async () => {
+        unlockSoundsOnce();      // ensures audio is allowed
+        stopRingtone();
+        if (!voice.enabled) {
+          try { await joinVoice(); } catch(e) { console.warn('joinVoice failed', e); }
+        }
+      };
+    }
+
+    if (dismiss) {
+      dismiss.onclick = () => {
+        unlockSoundsOnce();
+        stopRingtone();
+      };
     }
   });
 
@@ -2063,11 +3154,24 @@
     cancelBtn.style.marginLeft = '6px';
 
     // replace content element with editor
+    const editWrap = document.createElement('div');
+    editWrap.className = 'inline-edit';
+
+    saveBtn.className = 'btn-primary';
+    cancelBtn.className = 'btn-small';
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'edit-actions';
+    actionsRow.appendChild(cancelBtn);
+    actionsRow.appendChild(saveBtn);
+
+    editWrap.appendChild(textarea);
+    editWrap.appendChild(fileInput);
+    editWrap.appendChild(actionsRow);
+
     contentEl.innerHTML = '';
-    contentEl.appendChild(textarea);
-    contentEl.appendChild(fileInput);
-    contentEl.appendChild(saveBtn);
-    contentEl.appendChild(cancelBtn);
+    contentEl.appendChild(editWrap);
+
 
     saveBtn.onclick = async () => {
       const newText = textarea.value.trim();
@@ -2846,7 +3950,12 @@ async function connectSocket() {
         new Notification(name, { body: (payload.content || '').toString().slice(0, 120) });
       }
 
-      const node = renderMessage(payload);
+      const container = document.getElementById('container');
+      const lastMsgEl = container ? Array.from(container.children).reverse().find(x => x.id && x.id.startsWith('msg-')) : null;
+      const lastId = lastMsgEl ? lastMsgEl.id.replace('msg-','') : null;
+      const prev = lastId ? msgIndex[lastId] : null;
+
+      const node = renderMessage(payload, false, prev);
       showMessageElement(node);
       return;
     }
@@ -2895,6 +4004,8 @@ async function connectSocket() {
     }
 
     if (payload.type === 'react') {
+      hideReactionTooltip();
+
       const id = payload.id;
       const emoji = payload.emoji;
       const users = payload.users || [];
@@ -2928,7 +4039,9 @@ async function connectSocket() {
 
     if (payload.type === "user_directory") {
       Object.assign(userDirectory, payload.users || {});
-      renderPresence(); // optional
+      renderPresence();
+      renderTyping();
+      renderMembersSidebar();
       return;
     }
 
@@ -2984,6 +4097,10 @@ async function connectSocket() {
       }
       renderMembersSidebar();
 
+      if (!voice.enabled && u && u !== myId) {
+        startRingtone(u);
+      }
+
       if (voice.enabled && u && u !== myId) {
         ensureVideoTile(u, u === myId)
         if (shouldInitiateOffer(myId, u)) {
@@ -3004,6 +4121,10 @@ async function connectSocket() {
         removeVideoTile(u);
       }
       renderMembersSidebar();
+
+      if (incomingFromUser && u === incomingFromUser) {
+        stopRingtone();
+      }
       return;
     }
 
@@ -3181,6 +4302,57 @@ async function connectSocket() {
         badges.appendChild(b);
       }
 
+      if (vs.in_voice && vs.screen) {
+        const b = document.createElement('span');
+        b.className = 'badge badge-voice';
+        b.textContent = 'Screen';
+        badges.appendChild(b);
+      }
+
+      if (vs.in_voice && audioPrefs.mutedUsers.has(m.username)) {
+        const b = document.createElement('span');
+        b.className = 'badge badge-muted';
+        b.textContent = 'Muted (You)';
+        badges.appendChild(b);
+      }
+
+
+      if (vs.in_voice && m.username && m.username !== myId) {
+        const controls = document.createElement('div');
+        controls.style.display = 'flex';
+        controls.style.gap = '6px';
+        controls.style.alignItems = 'center';
+
+        const isUserMuted = audioPrefs.mutedUsers.has(m.username);
+
+        const mu = document.createElement('button');
+        mu.className = 'btn-small';
+        mu.textContent = isUserMuted ? 'Unmute' : 'Mute';
+        mu.title = 'Client-side mute (you only)';
+        mu.onclick = (e) => { e.stopPropagation(); toggleUserMute(m.username); };
+        controls.appendChild(mu);
+
+        const vol = document.createElement('input');
+        vol.type = 'range';
+        vol.min = '0';
+        vol.max = '1';
+        vol.step = '0.05';
+        vol.value = String(audioPrefs.userVolumes.has(m.username) ? audioPrefs.userVolumes.get(m.username) : 1);
+        vol.title = 'Client-side volume';
+        vol.oninput = (e) => {
+          e.stopPropagation();
+          setUserVolume(m.username, parseFloat(vol.value));
+        };
+        controls.appendChild(vol);
+
+        // If deafened, you can optionally disable per-user controls:
+        if (audioPrefs.deafened) {
+          mu.disabled = true;
+          vol.disabled = true;
+        }
+
+        row.appendChild(controls);
+      }
       row.appendChild(badges);
       list.appendChild(row);
     });
@@ -3458,6 +4630,8 @@ async function connectSocket() {
         }
       }
 
+      applyAudioPrefsToAllSinks();
+
       document.getElementById('audioMsg').textContent = 'Applied.';
     } catch (e) {
       console.error(e);
@@ -3481,6 +4655,8 @@ async function connectSocket() {
 
   document.getElementById('camOffBtn').onclick = () => stopCamera();
 
+  document.getElementById('shareBtn').onclick = () => startScreenShare().catch(console.error);
+  document.getElementById('stopShareBtn').onclick = () => stopScreenShare();
 
   document.getElementById('submitButton').onclick = () => {
     const input = document.getElementById('inputText');
