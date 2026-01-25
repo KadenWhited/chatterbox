@@ -1075,6 +1075,28 @@
     return t;
   }
 
+  let ICE_CONFIG_PROMISE = null;
+
+  async function getIceConfig() {
+    if (ICE_CONFIG_PROMISE) return ICE_CONFIG_PROMISE;
+
+    const token = getToken();
+    ICE_CONFIG_PROMISE = fetch('/webrtc/ice', {
+      headers: { token: token || '' }
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error('ICE fetch failed: ' + r.status);
+        return await r.json();
+      })
+      .catch((e) => {
+        console.warn('[webrtc] using STUN-only fallback (ICE fetch failed)', e);
+        return { iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] };
+      });
+
+    return ICE_CONFIG_PROMISE;
+  }
+
+
   function getBottomSafeY() {
     const composer = document.getElementById('composer');
     const replyBox = document.getElementById('replyBox');
@@ -1549,12 +1571,6 @@
     return String(me) < String(other);
   }
 
-  function getIceServers() {
-    // STUN is enough for local + many networks; TURN can be added later.
-    return [
-      { urls: "stun:stun.l.google.com:19302" }
-    ];
-  }
 
   function ensureAudioSink(username) {
     const holder = document.getElementById("voiceAudioSinks");
@@ -1602,22 +1618,38 @@
     sendVoiceSignal(peerUsername, { kind: "renegotiate" });
   }
 
+  async function applyAudioSenderParams(pc, maxKbps = 64) {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+    if (!sender || typeof sender.getParameters !== 'function') return;
+
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    params.encodings[0].maxBitrate = Math.max(24, maxKbps) * 1000;
+
+    try { await sender.setParameters(params); } catch (e) {
+      console.warn('[webrtc] setParameters(audio) failed', e);
+    }
+  }
 
   async function ensurePeerConnection(peerUsername) {
     if (voice.pcs.has(peerUsername)) return voice.pcs.get(peerUsername);
 
-    const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+    const ice = await getIceConfig();
+    const pc = new RTCPeerConnection({
+      ...ice,
+      iceCandidatePoolSize: 4,     // helps ICE start faster in many cases
+    });
 
     // Add our mic tracks
     if (voice.localStream) {
       voice.localStream.getTracks().forEach(t => pc.addTrack(t, voice.localStream));
+      await applyAudioSenderParams(pc, 64);
     }
 
     // If camera is already enabled, add the video track to this new peer connection too
     if (video.enabled && video.localStream) {
       video.localStream.getTracks().forEach(t => pc.addTrack(t, video.localStream));
     }
-
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
@@ -1677,7 +1709,6 @@
       }
     };
 
-
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === "failed" || st === "closed" || st === "disconnected") {
@@ -1686,6 +1717,23 @@
         if (st === "failed" || st === "closed") {
           closePeer(peerUsername);
         }
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const st = pc.iceConnectionState;
+      if (st === 'failed') {
+        iceRestart(peerUsername);
+      }
+    };
+
+    pc.onnegotiationneeded = async () => {
+      if (!shouldInitiateOffer(myId, peerUsername)) return;
+
+      try {
+        await createAndSendOffer(peerUsername);
+      } catch (e) {
+        console.warn("[webrtc] negotiationneeded offer failed", peerUsername, e);
       }
     };
 
@@ -1973,7 +2021,11 @@
         deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
         echoCancellation: !!echo,
         noiseSuppression: !!noise,
-        autoGainControl: !!agc
+        autoGainControl: !!agc,
+
+        channelCount: 1,
+        sampleRate: 48000,
+        sampleSize: 16
       }
     };
 
@@ -2002,6 +2054,27 @@
         // if connection existed but had no sender yet
         pc.addTrack(newAudioTrack, voice.localStream);
       }
+    }
+  }
+
+  async function iceRestart(peerUsername) {
+    const pc = voice.pcs.get(peerUsername);
+    if (!pc) return;
+
+    // Only the deterministic offerer should initiate the ICE-restart offer
+    if (!shouldInitiateOffer(myId, peerUsername)) {
+      requestRenegotiate(peerUsername);
+      return;
+    }
+
+    try {
+      pc.restartIce?.();
+      const offer = await pc.createOffer({ iceRestart: true, offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      sendVoiceSignal(peerUsername, { kind: "offer", sdp: pc.localDescription });
+      console.log('[webrtc] ICE restart offer sent to', peerUsername);
+    } catch (e) {
+      console.warn('[webrtc] ICE restart failed for', peerUsername, e);
     }
   }
 
@@ -2139,11 +2212,13 @@
     // If user stops sharing via browser UI, clean up
     track.onended = () => stopScreenShare();
 
-    // Replace outbound sender track on all peers (use same 'video' sender slot)
     for (const [username, pc] of voice.pcs.entries()) {
       const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
       if (sender) await sender.replaceTrack(track);
       else pc.addTrack(track, stream);
+
+      // IMPORTANT: now the sender exists, so the cap actually applies
+      await applyVideoSenderParams(pc, kbps);
     }
 
     document.getElementById('shareBtn').style.display = 'none';
@@ -2175,10 +2250,17 @@
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
 
-    params.encodings[0].maxBitrate = Math.max(100, maxKbps) * 1000; // bps
-    try { await sender.setParameters(params); } catch (e) {}
-  }
+    // cap bitrate
+    params.encodings[0].maxBitrate = Math.max(100, maxKbps) * 1000;
 
+    // prioritize keeping audio stable by allowing video to degrade gracefully
+    // (browser may ignore, but often helps)
+    params.degradationPreference = 'balanced';
+
+    try { await sender.setParameters(params); } catch (e) {
+      console.warn('[webrtc] setParameters(video) failed', e);
+    }
+  }
 
   function stopScreenShare(){
     if (!screenShare.enabled) return;
@@ -3929,8 +4011,6 @@ function resetChatUI(){
   renderTyping();
 }
 
-
-
 // centralized connect function
 async function connectSocket() {
   const token = getToken()
@@ -3981,6 +4061,8 @@ async function connectSocket() {
     throw e;
   }
 
+
+
   // build ws url relative to current page so it works on Render / localhost / prod
   const isSecure = (window.location.protocol === 'https:');
   const wsProto = isSecure ? 'wss' : 'ws';
@@ -4008,6 +4090,12 @@ async function connectSocket() {
   } catch(e) {
     console.warn('fetchMe failed on connect', e);
   }
+
+  setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "ping", t: Date.now() }));
+    }
+  }, 25000);
 
   socket.addEventListener('open', () => {
 

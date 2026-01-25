@@ -77,6 +77,27 @@ ALLOWED_UPLOAD_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 
+ICE_CACHE = TTLCache(maxsize=4, ttl=300)  # 5 min cache
+
+def _build_ice_servers():
+    # Always include a public STUN
+    servers = [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+    # Optional TURN (recommended)
+    turn_urls = os.getenv("TURN_URLS", "").strip()
+    turn_user = os.getenv("TURN_USERNAME", "").strip()
+    turn_cred = os.getenv("TURN_CREDENTIAL", "").strip()
+
+    if turn_urls and turn_user and turn_cred:
+        urls = [u.strip() for u in turn_urls.split(",") if u.strip()]
+        servers.append({
+            "urls": urls,
+            "username": turn_user,
+            "credential": turn_cred
+        })
+
+    return servers
+
 def require_admin_token(x_admin_token: str | None = Header(None)):
     if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="forbidden")
@@ -1082,7 +1103,22 @@ async def remove_gif_favorite(id: int, current_user = Depends(get_current_user))
 def read_index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/webrtc/ice")
+async def webrtc_ice(current_user=Depends(get_current_user)):
+    """
+    Returns ICE servers to authenticated users.
+    Note: TURN credentials are inherently visible to clients (any WebRTC app has this reality).
+    Use time-limited TURN creds if you want stronger control later.
+    """
+    cached = ICE_CACHE.get("ice")
+    if cached:
+        return cached
 
+    payload = {
+        "iceServers": _build_ice_servers()
+    }
+    ICE_CACHE["ice"] = payload
+    return payload
 
 
 # username = string to track names
@@ -1626,6 +1662,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "screen": st.get("screen", False),
                 })
 
+            elif msg_type == "ping":
+                await connectionmanager.send_personal_message({"type": "pong"}, websocket)
 
             else:
                 await connectionmanager.send_personal_message({"type":"error","error":"unknown_type","got": msg_type}, websocket)
