@@ -562,10 +562,18 @@
       grid-template-columns: 2fr 1fr;
       gap: 10px;
       align-items: start;
+      z-index: 20;
+    }
+    .tile-box video{
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
     }
 
     #screenStage.theatre {
       display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
     }
 
     .stage-col-primary { min-width: 0; }
@@ -609,6 +617,16 @@
     .tile-controls input[type="range"] {
       width: 110px;
       padding: 0 6px;
+    }
+
+    #screenPrimary{
+      display: flex;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    #screenPrimary .stage-tile{
+      width: min(100%, 980px);
     }
 
     #incomingCallBanner{
@@ -789,7 +807,7 @@
       top:var(--header-height); height:280px;
       gap:8px; padding:8px;
       background:rgba(0,0,0,0.18);
-      z-index:34; overflow:hidden;">
+      z-index:20; overflow:hidden;">
       <div class="stage-col-primary" id="screenPrimary"></div>
       <div class="stage-col-side" id="screenSide"></div>
     </div>
@@ -799,7 +817,7 @@
       top:var(--header-height); height:220px;
       display:none; gap:8px; padding:8px;
       background:rgba(0,0,0,0.15);
-      z-index:34; overflow:auto;">
+      z-index:20; overflow:auto;">
     </div>
 
     <!-- Pins panel toggled via View Pins -->
@@ -855,8 +873,6 @@
     </div>
 
   </div>
-
-
 <script>
 
   let socket = null;
@@ -941,19 +957,38 @@
   // Apply prefs to one user's sink (and keep it consistent)
   function applyAudioPrefsToSink(username) {
     const el = voice.sinks.get(username);
-    if (!el) return;
-
     const userMuted = audioPrefs.mutedUsers.has(username);
     const vol = audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1;
 
-    // Deafen overrides everything
-    el.muted = audioPrefs.deafened || userMuted;
-    el.volume = clamp(vol, 0, 1);
+    if (el) {
+      // Deafen overrides everything
+      el.muted = audioPrefs.deafened || userMuted;
+      el.volume = clamp(vol, 0, 1);
+    }
+
+    // Keep tile UI in sync even if sink doesn't exist yet
+    syncVideoTileControls(username);
   }
+
 
   // Apply prefs to all sinks
   function applyAudioPrefsToAllSinks() {
     for (const u of voice.sinks.keys()) applyAudioPrefsToSink(u);
+  }
+
+  function syncVideoTileControls(username) {
+    const ctrl = video.audioControls?.get(username);
+    if (!ctrl) return;
+
+    const isMuted = audioPrefs.mutedUsers.has(username);
+    const vol = audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1;
+
+    ctrl.muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+    ctrl.vol.value = String(clamp(vol, 0, 1));
+
+    const disabled = !!audioPrefs.deafened;
+    ctrl.muteBtn.disabled = disabled;
+    ctrl.vol.disabled = disabled;
   }
 
   // Toggle per-user mute (client-side)
@@ -965,6 +1000,7 @@
     saveAudioPrefs();
     applyAudioPrefsToSink(username);
     renderMembersSidebar();
+    syncVideoTileControls(username);
   }
 
   // Set per-user volume (client-side)
@@ -972,6 +1008,7 @@
     audioPrefs.userVolumes.set(username, clamp(v, 0, 1));
     saveAudioPrefs();
     applyAudioPrefsToSink(username);
+    syncVideoTileControls(username);
   }
 
   // Toggle global deafen
@@ -2093,8 +2130,10 @@
     // Render local screen tile
     const localTile = ensureScreenTile(myId, true);
     if (localTile) {
+      removeVideoTile(myId)
       localTile.srcObject = stream;
       showScreenOverlay(myId, false);
+      
     }
 
     // If user stops sharing via browser UI, clean up
@@ -2166,6 +2205,11 @@
     removeScreenTile(myId);
 
     screenShare.enabled = false;
+
+    if (voice.enabled) {
+      ensureVideoTile(myId, true);
+      showVideoOverlay(myId, !video.enabled); // if camera isn't enabled, show overlay
+    }
 
     sendVoiceState({ screen: false });
 
@@ -2575,17 +2619,22 @@
     reactionTipEl.style.display = 'block';
   }
 
+  let reactionTooltipGuardsWired = false;
+
+  function wireReactionTooltipGuardsOnce(){
+    if (reactionTooltipGuardsWired) return;
+    reactionTooltipGuardsWired = true;
+    document.addEventListener('scroll', hideReactionTooltip, true);
+    window.addEventListener('blur', hideReactionTooltip);
+    document.addEventListener('click', hideReactionTooltip, true);
+  }
+
   function hideReactionTooltip() {
     if (reactionTipEl) reactionTipEl.style.display = 'none';
-    // Always hide the reaction tooltip on common state changes
-    (function wireReactionTooltipGuards(){
-      // capture-phase scroll catches scrolls in .chat-wrapper too
-      document.addEventListener('scroll', hideReactionTooltip, true);
-      window.addEventListener('blur', hideReactionTooltip);
-      document.addEventListener('click', hideReactionTooltip, true);
-    })();
-
   }
+
+  wireReactionTooltipGuardsOnce();
+
 
 
   let voiceUIWired = false;
@@ -2642,7 +2691,8 @@
     enabled: false,
     localStream: null,   // just video stream (track)
     tiles: new Map(),     // username -> HTMLVideoElement
-    overlays: new Map()
+    overlays: new Map(),
+    audioControls: new Map()
   };
 
   const screenShare = {
@@ -2716,20 +2766,66 @@
     box.appendChild(overlay);
 
     const wrap = document.createElement('div');
+    wrap.className = 'video-tile';
+    wrap.dataset.user = username;
     wrap.style.display = 'grid';
     wrap.style.gap = '6px';
 
+    const prof2 = userDirectory[username] || {};
+    const shown2 = prof2.display_name || username;
+
     const label = document.createElement('div');
-    label.textContent = username;
+    label.textContent = shown2;
     label.style.color = 'var(--muted)';
     label.style.fontSize = '12px';
 
-    wrap.appendChild(box);
-    wrap.appendChild(label);
+    // Controls under tile (remote only): mute + volume
+    if (!isLocal) {
+      const controls = document.createElement('div');
+      controls.style.display = 'flex';
+      controls.style.gap = '8px';
+      controls.style.alignItems = 'center';
+
+      const muteBtn = document.createElement('button');
+      muteBtn.className = 'btn-small';
+      muteBtn.title = 'Client-side mute (you only)';
+      muteBtn.onclick = (e) => {
+        e.stopPropagation();
+        toggleUserMute(username);
+      };
+
+      const vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.title = 'Client-side volume';
+      vol.oninput = (e) => {
+        e.stopPropagation();
+        setUserVolume(username, parseFloat(vol.value));
+      };
+
+      controls.appendChild(muteBtn);
+      controls.appendChild(vol);
+
+      // store refs so we can sync text/value/disabled state
+      video.audioControls.set(username, { muteBtn, vol });
+      // initialize UI state
+      syncVideoTileControls(username);
+
+      wrap.appendChild(box);
+      wrap.appendChild(label);
+      wrap.appendChild(controls);
+    } else {
+      wrap.appendChild(box);
+      wrap.appendChild(label);
+    }
+
     stage.appendChild(wrap);
 
     video.tiles.set(username, el);
     video.overlays.set(username, overlay);
+
 
     // start with overlay visible
     overlay.style.display = 'flex';
@@ -2746,9 +2842,14 @@
   function removeVideoTile(username) {
     const el = video.tiles.get(username);
     if (!el) return;
-    const wrap = el.parentElement;
+
+    // remove the full tile wrapper (box + label + controls)
+    const wrap = el.closest('.video-tile') || el.parentElement?.parentElement || el.parentElement;
     try { wrap?.remove(); } catch(e){}
+
     video.tiles.delete(username);
+    video.overlays.delete(username);
+    video.audioControls?.delete(username);
 
     // hide stage if no tiles
     const stage = document.getElementById('videoStage');
@@ -2757,10 +2858,30 @@
 
   function setScreenStageVisible(on){
     const st = document.getElementById('screenStage');
+    const vs = document.getElementById('videoStage');
     if (!st) return;
+
     st.classList.toggle('theatre', !!on);
     st.style.display = on ? 'grid' : 'none';
+
+    if (on) {
+      // Screen stage owns the top area; push chat down accordingly
+      document.documentElement.style.setProperty('--stage-height', '280px');
+
+      // Prevent overlap/click stealing
+      if (vs) vs.style.display = 'none';
+    } else {
+      // Restore video stage if needed
+      if (vs && video.tiles.size > 0) {
+        vs.style.display = 'flex';
+        document.documentElement.style.setProperty('--stage-height', '220px');
+      } else {
+        document.documentElement.style.setProperty('--stage-height', '0px');
+        if (vs) vs.style.display = 'none';
+      }
+    }
   }
+
 
   function setPrimaryScreen(username) {
     stageState.primaryScreenUser = username;
@@ -2797,12 +2918,16 @@
     });
   }
 
-  function makeFullscreen(el) {
+  function toggleFullscreen(el) {
     if (!el) return;
-    const doc = document;
-    if (doc.fullscreenElement) doc.exitFullscreen?.();
-    else el.requestFullscreen?.();
+
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      el.requestFullscreen?.({ navigationUI: "hide" }).catch(() => {});
+    }
   }
+
 
   function ensureScreenTile(username, isLocal=false){
     if (!voice.enabled) return null;
@@ -2817,18 +2942,21 @@
     wrap.className = 'stage-tile';
     wrap.dataset.user = username;
 
-    // Click tile to promote to primary (theatre mode)
-    wrap.addEventListener('click', (ev) => {
-      // avoid stealing clicks from controls
-      const tag = (ev.target && ev.target.tagName || '').toLowerCase();
-      if (tag === 'button' || tag === 'input') return;
-      setPrimaryScreen(username);
-    });
-
     const box = document.createElement('div');
     box.className = 'tile-box';
     box.style.width = '100%';
     box.style.height = '260px';
+
+    box.addEventListener('click', (ev) => {
+      if (ev.target.closest('.tile-controls')) return;
+      toggleFullscreen(box);
+    });
+
+    // 3) Optional: double-click promotes to primary (keeps your theatre UX)
+    box.addEventListener('dblclick', (ev) => {
+      if (ev.target.closest('.tile-controls')) return;
+      setPrimaryScreen(username);
+    });
 
     el = document.createElement('video');
     el.autoplay = true;
@@ -2858,6 +2986,35 @@
     fsBtn.textContent = '⤢';
     fsBtn.title = 'Fullscreen';
     fsBtn.onclick = (e) => { e.stopPropagation(); makeFullscreen(box); };
+    controls.appendChild(fsBtn);
+
+    if (!isLocal) {
+      const muteUserBtn = document.createElement('button');
+      const muteStreamBtn = document.createElement('button');
+
+      const syncText = () => {
+        const isUserMuted = audioPrefs.mutedUsers.has(username);
+        muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
+
+        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
+      };
+
+      muteUserBtn.title = 'Client-side: mutes the audio sink from this user';
+      muteUserBtn.onclick = (e) => { e.stopPropagation(); toggleUserMute(username); syncText(); };
+
+      muteStreamBtn.title = 'Mutes the <video> element only (often not the real audio path)';
+      muteStreamBtn.onclick = (e) => { e.stopPropagation(); el.muted = !el.muted; syncText(); };
+
+      controls.appendChild(muteUserBtn);
+      controls.appendChild(muteStreamBtn);
+
+      syncText();
+
+      if (audioPrefs.deafened) {
+        muteUserBtn.disabled = true;
+        muteStreamBtn.disabled = true;
+      }
+    }
 
     const hideBtn = document.createElement('button');
     hideBtn.textContent = 'Hide';
@@ -2867,8 +3024,8 @@
       stageState.hiddenScreens.add(username);
       relayoutScreenStage();
     };
+    controls.appendChild(hideBtn);
 
-    controls.appendChild(fsBtn);
 
     // Only show volume/mute controls for remote streams
     if (!isLocal) {
@@ -2897,24 +3054,41 @@
       };
       controls.appendChild(muteStreamBtn);
 
-      const vol = document.createElement('input');
-      vol.type = 'range';
-      vol.min = '0';
-      vol.max = '1';
-      vol.step = '0.05';
-      vol.value = String(audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1);
-      vol.title = 'User volume (client-side)';
-      vol.oninput = (e) => {
-        e.stopPropagation();
-        setUserVolume(username, parseFloat(vol.value));
-      };
-      controls.appendChild(vol);
+      // Only show volume/mute controls for remote streams
+      if (!isLocal) {
+        const muteUserBtn = document.createElement('button');
 
-      if (audioPrefs.deafened) {
-        muteUserBtn.disabled = true;
-        muteStreamBtn.disabled = true;
-        vol.disabled = true;
+        const syncText = () => {
+          const isUserMuted = audioPrefs.mutedUsers.has(username);
+          muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
+        };
+
+        syncText();
+        muteUserBtn.title = 'Client-side: mute everything you hear from this user';
+        muteUserBtn.onclick = (e) => {
+          e.stopPropagation();
+          toggleUserMute(username);
+          syncText();
+        };
+        controls.appendChild(muteUserBtn);
+
+        const muteStreamBtn = document.createElement('button');
+        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
+        muteStreamBtn.title = 'Mute the <video> element (may not affect audio sink)';
+        muteStreamBtn.onclick = (e) => {
+          e.stopPropagation();
+          el.muted = !el.muted;
+          muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
+        };
+        controls.appendChild(muteStreamBtn);
+
+        // Deafen disables per-user controls
+        if (audioPrefs.deafened) {
+          muteUserBtn.disabled = true;
+          muteStreamBtn.disabled = true;
+        }
       }
+
     }
 
 
@@ -3117,6 +3291,24 @@
       };
     }
   });
+
+  (function wireAudioModalDismiss(){
+    const modal = document.getElementById('audioModal');
+    if (!modal) return;
+
+    // click outside content closes
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
+
+    // ESC closes
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && modal.style.display !== 'none') {
+        modal.style.display = 'none';
+      }
+    });
+  })();
+
 
   // delegated handler for edit buttons (works even if messages are rendered later)
   document.getElementById('container').addEventListener('click', (ev) => {
@@ -4160,21 +4352,37 @@ async function connectSocket() {
       if (typeof payload.muted === 'boolean') patch.muted = payload.muted;
       if (typeof payload.speaking === 'boolean') patch.speaking = payload.speaking;
 
+      if (typeof payload.screen === 'boolean') patch.screen = payload.screen;
+      if (typeof payload.video === 'boolean') patch.video = payload.video;
+
       setVS(u, patch);
       renderMembersSidebar();
 
-      // optional: auto-expire speaking to avoid “stuck speaking” if packets drop
-      if (patch.speaking) {
-        const expected = Date.now();
-        setTimeout(() => {
-          const cur = getVS(u);
-          // only clear if still speaking (no later update happened)
-          if (cur.speaking) {
-            setVS(u, { speaking: false });
-            renderMembersSidebar();
-          }
-        }, 1200);
+      if (typeof patch.screen === 'boolean') {
+      if (patch.screen) {
+        removeVideoTile(u);                 // remove their video placeholder tile
+        ensureScreenTile(u, u === myId);    // show in screenStage
+        setPrimaryScreen(u);                // promote newly-sharing user
+      } else {
+        removeScreenTile(u);                // stop showing screen tile
+        // restore video placeholder tile if user is in voice
+        if (getVS(u).in_voice) {
+          ensureVideoTile(u, u === myId);
+          showVideoOverlay(u, true);
+        }
       }
+    }
+
+    // Optional: auto-expire speaking
+    if (patch.speaking) {
+      setTimeout(() => {
+        const cur = getVS(u);
+        if (cur.speaking) {
+          setVS(u, { speaking: false });
+          renderMembersSidebar();
+        }
+      }, 1200);
+    }
 
       return;
     }
@@ -4332,20 +4540,6 @@ async function connectSocket() {
         mu.onclick = (e) => { e.stopPropagation(); toggleUserMute(m.username); };
         controls.appendChild(mu);
 
-        const vol = document.createElement('input');
-        vol.type = 'range';
-        vol.min = '0';
-        vol.max = '1';
-        vol.step = '0.05';
-        vol.value = String(audioPrefs.userVolumes.has(m.username) ? audioPrefs.userVolumes.get(m.username) : 1);
-        vol.title = 'Client-side volume';
-        vol.oninput = (e) => {
-          e.stopPropagation();
-          setUserVolume(m.username, parseFloat(vol.value));
-        };
-        controls.appendChild(vol);
-
-        // If deafened, you can optionally disable per-user controls:
         if (audioPrefs.deafened) {
           mu.disabled = true;
           vol.disabled = true;

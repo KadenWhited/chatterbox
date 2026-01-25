@@ -43,18 +43,21 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:8000",
-    "http://localhost:8000"
+    "http://localhost:8000",
+    "https://chatterbox-eq7f.onrender.com",
 ]
+
+env_origins = os.getenv("CORS_ORIGINS")
+if env_origins:
+    origins = [o.strip() for o in env_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
-
-#app.add_middleware(TrustedHostMiddleware, allowed_hosts=["chatterbox-eq7f.onrender.com", "localhost", "127.0.0.1"])
 
 def get_db():
     db = SessionLocal()
@@ -305,7 +308,7 @@ class ConnectionManager:
     
     def set_voice_state(self, room_id: str, username: str, *, muted=None, speaking=None, video=None, screen=None):
         room = self.voice_states.setdefault(room_id, {})
-        st = room.setdefault(username, {"muted": False, "speaking": False, "video": False, "ts": None})
+        st = room.setdefault(username, {"muted": False, "speaking": False, "video": False, "screen": False, "ts": None})
         if muted is not None:
             st["muted"] = bool(muted)
         if speaking is not None:
@@ -1599,6 +1602,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 muted = data.get("muted", None)
                 speaking = data.get("speaking", None)
+                video = data.get("video", None)
+                screen = data.get("screen", None)
 
                 # Normalize to bool if present
                 if muted is not None:
@@ -1610,30 +1615,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 if speaking is not None:
                     speaking = bool(speaking)
 
-                connectionmanager.set_voice_state(room_id, username, muted=muted, speaking=speaking)
-
-                await connectionmanager.broadcast_room(room_id, {
-                    "type": "voice_state",
-                    "user": username,
-                    "muted": muted if muted is not None else None,
-                    "speaking": speaking if speaking is not None else None,
-                }, exclude=None)
-
-            elif data.get("type") == "voice_state":
-                muted = data.get("muted")
-                speaking = data.get("speaking")
-                video = data.get("video")
-                screen = data.get("screen")
-
+                st = connectionmanager.voice_states_in_room(room_id).get(username, {})
                 connectionmanager.set_voice_state(room_id, username, muted=muted, speaking=speaking, video=video, screen=screen)
-
                 await connectionmanager.broadcast_room(room_id, {
                     "type": "voice_state",
                     "user": username,
-                    "muted": muted,
-                    "speaking": speaking,
-                    "video": video,
-                    "screen": screen,
+                    "muted": st.get("muted", False),
+                    "speaking": st.get("speaking", False),
+                    "video": st.get("video", False),
+                    "screen": st.get("screen", False),
                 })
 
 
@@ -1645,20 +1635,5 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         print("[ws] unexpected error:", repr(e))
     finally:
-        meta = connectionmanager.disconnect(websocket)
-        if meta:
-            rid = meta.get("room_id")
-            username = meta.get("username")
-
-            # remove from voice + tell others
-            if rid and username:
-                if username in connectionmanager.voice_members.get(rid, set()):
-                    connectionmanager.remove_voice_member(rid, username)
-                    connectionmanager.clear_voice_state(rid, username)
-                    try:
-                        await connectionmanager.broadcast_room(rid, {
-                            "type": "voice_leave",
-                            "user": username,
-                        })
-                    except Exception as e:
-                        print("[ws] failed to broadcast voice_leave:", repr(e))
+        await connectionmanager.cleanup_disconnect(websocket)
+        meta = None
