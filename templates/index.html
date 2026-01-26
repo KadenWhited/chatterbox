@@ -543,6 +543,15 @@
     a { color:var(--accent); }
     .messages-end-spacer { height: calc(var(--composer-height) - 12px); flex-shrink:0; }
 
+    #audioModal .audio-footer{
+      position: sticky;
+      bottom: 0;
+      background: var(--panel);
+      padding-top: 10px;
+      margin-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+
     #videoStage {
       position: fixed;
       left: 0;
@@ -558,10 +567,16 @@
     }
 
     #screenStage {
+      position: fixed;
+      left: 0;
+      right: 260px;
+      top: var(--header-height);
       display: none;
+      height: var(--screen-stage-height, 280px);
       grid-template-columns: 2fr 1fr;
       gap: 10px;
-      align-items: start;
+      align-items: stretch;
+      overflow: hidden;
       z-index: 20;
     }
     .tile-box video{
@@ -576,21 +591,46 @@
       grid-template-columns: minmax(0, 1fr) 340px;
     }
 
-    .stage-col-primary { min-width: 0; }
+    #screenStage .theatre-bar{
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      z-index: 60;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    #screenStage .theatre-bar .btn-small{
+      background: rgba(15,17,21,0.55);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .stage-col-primary { 
+      min-width: 0;
+      height: 100%;
+    }
+
     .stage-col-side {
       display: grid;
       gap: 10px;
       align-content: start;
       overflow: auto;
-      max-height: 280px;
+      max-height: var(--screen-stage-height, 280px);
     }
 
     .stage-tile {
       user-select: none;
+      width: 240px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
-    .stage-tile .tile-box {
+    .tile-box {
       position: relative;
+      height: 160px;
       border-radius: 10px;
       overflow: hidden;
       background: #000;
@@ -626,7 +666,23 @@
     }
 
     #screenPrimary .stage-tile{
-      width: min(100%, 980px);
+      width: 100%;
+      height: 100%;
+    }
+
+    #screenPrimary .stage-tile .tile-box {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+    }
+
+    #screenSide .stage-tile{
+      width: 240px;
+    }
+
+    #screenSide .stage-tile .tile-box {
+      height: 160px;
+      flex: 0 0 auto;
     }
 
     #incomingCallBanner{
@@ -732,7 +788,7 @@
       </div>
 
       <div id="audioModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20000;">
-        <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px;">
+        <div style="max-width:520px; margin:8vh auto; background:var(--panel); border:1px solid rgba(255,255,255,0.05); border-radius:12px; padding:12px; max-height: calc(100vh - 16vh); overflow:auto;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div style="font-weight:700;">Audio Settings</div>
             <button id="closeAudio" class="btn-small">Close</button>
@@ -771,8 +827,81 @@
               <span>Auto gain control</span>
             </label>
 
-            <button id="applyAudio" class="btn-primary">Apply</button>
-            <div id="audioMsg" style="color:var(--muted); font-size:12px;"></div>
+            <!-- Master output -->
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Master Output Volume</span>
+              <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1">
+              <div id="masterVolVal" style="color:var(--muted); font-size:12px;">100%</div>
+            </label>
+
+            <!-- Voice bitrate / quality -->
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Voice Quality (bitrate)</span>
+              <select id="voiceKbps">
+                <option value="32">Low (32 kbps)</option>
+                <option value="64">Standard (64 kbps)</option>
+                <option value="96" selected>High (96 kbps)</option>
+              </select>
+              <div style="color:var(--muted); font-size:12px;">Higher improves clarity but uses more bandwidth.</div>
+            </label>
+
+            <!-- Speaking sensitivity -->
+            <label style="display:grid; gap:6px;">
+              <span style="color:var(--muted); font-size:12px;">Speaking Sensitivity</span>
+              <input id="speakThresh" type="range" min="0.005" max="0.080" step="0.001" value="0.030">
+              <div id="speakThreshVal" style="color:var(--muted); font-size:12px;">0.030</div>
+            </label>
+
+            <!-- Mic processing -->
+            <div style="margin-top:6px; display:grid; gap:8px;">
+              <div style="font-weight:600;">Mic Processing</div>
+
+              <label style="display:flex; gap:10px; align-items:center;">
+                <input id="optHPF" type="checkbox" checked>
+                <span>High-pass filter (reduce rumble)</span>
+              </label>
+
+              <label style="display:flex; gap:10px; align-items:center;">
+                <input id="optComp" type="checkbox" checked>
+                <span>Compressor/limiter (more consistent volume)</span>
+              </label>
+
+              <label style="display:flex; gap:10px; align-items:center;">
+                <input id="optGate" type="checkbox" checked>
+                <span>Noise gate (reduce background)</span>
+              </label>
+
+              <label id="gateRow" style="display:grid; gap:6px;">
+                <span style="color:var(--muted); font-size:12px;">Noise Gate Threshold</span>
+                <input id="gateThresh" type="range" min="0.005" max="0.080" step="0.001" value="0.025">
+                <div id="gateThreshVal" style="color:var(--muted); font-size:12px;">0.025</div>
+              </label>
+            </div>
+
+            <!-- Mic test + meter -->
+            <div style="margin-top:8px; display:flex; gap:10px; align-items:center;">
+              <button id="testMicBtn" class="btn-small">Mic Test</button>
+
+              <div style="flex:1; height:10px; background:rgba(255,255,255,0.06); border-radius:999px; overflow:hidden;">
+                <div id="micMeterFill" style="height:100%; width:0%; background: var(--accent);"></div>
+              </div>
+
+              <button id="testSpkBtn" class="btn-small" title="Plays ringtone through selected output">Test Output</button>
+            </div>
+
+            <!-- Centralized mixer for remote users -->
+            <div style="margin-top:12px; display:grid; gap:8px;">
+              <div style="font-weight:600;">Call Mixer</div>
+              <div id="remoteMixer" style="display:grid; gap:8px;"></div>
+              <div style="color:var(--muted); font-size:12px;">
+              </div>
+            </div>
+
+            <div class="audio-footer">
+              <button id="applyAudio" class="btn-primary">Apply</button>
+              <div id="audioMsg" style="color:var(--muted); font-size:12px;"></div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -903,6 +1032,14 @@
   let soundUnlocked = false;
   let incomingFromUser = null;
 
+  let GATE_WORKLET_URL = null;
+
+  let micTestRAF = null;
+  let micTestCtx = null;
+  let micTestAnalyser = null;
+  let micTestData = null;
+  let micTestStream = null;
+
   const voice = {
     enabled: false,
     muted: false,
@@ -914,9 +1051,10 @@
 
   // --- Client-side audio controls (viewer-side) ---
   const audioPrefs = {
-    deafened: false,                 // global "I hear nothing"
-    mutedUsers: new Set(),           // usernames muted client-side
+    deafened: false,
+    mutedUsers: new Set(),
     userVolumes: new Map(),          // username -> volume (0..1)
+    masterVolume: 1.0,
   };
 
   function unlockSoundsOnce() {
@@ -934,46 +1072,90 @@
     }
   }
 
-  // Optional persistence
   function loadAudioPrefs() {
     try {
       const j = JSON.parse(localStorage.getItem('audio_prefs') || '{}');
       audioPrefs.deafened = !!j.deafened;
       audioPrefs.mutedUsers = new Set(Array.isArray(j.mutedUsers) ? j.mutedUsers : []);
       audioPrefs.userVolumes = new Map(Object.entries(j.userVolumes || {}).map(([k,v]) => [k, Number(v)]));
+      audioPrefs.masterVolume = (typeof j.masterVolume === 'number') ? j.masterVolume : 1.0;
     } catch(e) {}
   }
+
   function saveAudioPrefs() {
     try {
       const obj = {
         deafened: audioPrefs.deafened,
         mutedUsers: Array.from(audioPrefs.mutedUsers),
         userVolumes: Object.fromEntries(audioPrefs.userVolumes.entries()),
+        masterVolume: audioPrefs.masterVolume,
       };
       localStorage.setItem('audio_prefs', JSON.stringify(obj));
     } catch(e) {}
   }
 
-  // Apply prefs to one user's sink (and keep it consistent)
   function applyAudioPrefsToSink(username) {
     const el = voice.sinks.get(username);
     const userMuted = audioPrefs.mutedUsers.has(username);
-    const vol = audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1;
+    const perUser = audioPrefs.userVolumes.has(username) ? audioPrefs.userVolumes.get(username) : 1;
+    const master = (typeof audioPrefs.masterVolume === 'number') ? audioPrefs.masterVolume : 1;
 
     if (el) {
-      // Deafen overrides everything
       el.muted = audioPrefs.deafened || userMuted;
-      el.volume = clamp(vol, 0, 1);
+      el.volume = clamp(perUser * master, 0, 1);
     }
 
-    // Keep tile UI in sync even if sink doesn't exist yet
     syncVideoTileControls(username);
   }
 
-
-  // Apply prefs to all sinks
   function applyAudioPrefsToAllSinks() {
     for (const u of voice.sinks.keys()) applyAudioPrefsToSink(u);
+  }
+
+  function ensureGateWorkletUrl() {
+    if (GATE_WORKLET_URL) return GATE_WORKLET_URL;
+
+    const code = `
+    class NoiseGateProcessor extends AudioWorkletProcessor {
+      static get parameterDescriptors() {
+        return [
+          { name: 'threshold', defaultValue: 0.025, minValue: 0, maxValue: 1 },
+          { name: 'attack', defaultValue: 0.010, minValue: 0.001, maxValue: 0.2 },
+          { name: 'release', defaultValue: 0.120, minValue: 0.01, maxValue: 1.0 },
+        ];
+      }
+      constructor() { super(); this._g = 1; }
+      process(inputs, outputs, params) {
+        const input = inputs[0];
+        const output = outputs[0];
+        if (!input || !input[0] || !output || !output[0]) return true;
+
+        const x = input[0];
+        const y = output[0];
+
+        let sum = 0;
+        for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+        const rms = Math.sqrt(sum / Math.max(1, x.length));
+
+        const thr = params.threshold[0];
+        const target = (rms >= thr) ? 1 : 0;
+
+        const attack = Math.max(0.001, params.attack[0]);
+        const release = Math.max(0.01, params.release[0]);
+
+        const tau = (target > this._g) ? attack : release;
+        const coef = 1 - Math.exp(-1 / (sampleRate * tau));
+        this._g += (target - this._g) * coef;
+
+        for (let i = 0; i < x.length; i++) y[i] = x[i] * this._g;
+        return true;
+      }
+    }
+    registerProcessor('noise-gate', NoiseGateProcessor);
+    `;
+
+    GATE_WORKLET_URL = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+    return GATE_WORKLET_URL;
   }
 
   function syncVideoTileControls(username) {
@@ -1021,7 +1203,7 @@
   }
 
 
-  window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chat'});
+  window.addEventListener('focus', () => { windowFocused = true; unreadCount = 0; document.title = 'Chatterbox'});
   window.addEventListener('blur', () => { windowFocused = false; });
 
   window.addEventListener('pointerdown', unlockSoundsOnce, { once: true });
@@ -1068,6 +1250,73 @@
   }
 
   function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+  function uniqueNodes(arr){
+    const out = [];
+    const seen = new Set();
+    (arr || []).forEach(n => {
+      if (!n || seen.has(n)) return;
+      seen.add(n);
+      out.push(n);
+    });
+    return out;
+  }
+
+  function refreshTrayVisibility(){
+    if (stageState.theatre) return;
+    const tray = document.getElementById('videoStage');
+    const hasAny = !!(tray && tray.children && tray.children.length > 0);
+    setStageVisible(hasAny);
+  }
+
+  function handleTileSurfaceClick(wrap){
+    if (!wrap) return;
+
+    if (!stageState.theatre) {
+      enterTheatre(wrap);
+      return;
+    }
+
+    // theatre is on:
+    if (stageState.primaryNode === wrap) {
+      exitTheatre();                // clicking primary toggles OFF
+    } else {
+      stageState.primaryNode = wrap; // clicking any other tile promotes it
+      relayoutTheatre();
+    }
+  }
+
+  function appendRemoteAudioControls(username, wrap){
+    if (!wrap || !username || username === myId) return;
+
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.gap = '8px';
+    controls.style.alignItems = 'center';
+
+    const muteBtn = document.createElement('button');
+    muteBtn.className = 'btn-small';
+    muteBtn.title = 'Client-side mute (you only)';
+    muteBtn.onclick = (e) => { e.stopPropagation(); toggleUserMute(username); };
+
+    const vol = document.createElement('input');
+    vol.type = 'range';
+    vol.min = '0';
+    vol.max = '1';
+    vol.step = '0.05';
+    vol.title = 'Client-side volume';
+    vol.oninput = (e) => { e.stopPropagation(); setUserVolume(username, parseFloat(vol.value)); };
+
+    controls.appendChild(muteBtn);
+    controls.appendChild(vol);
+
+    // store refs so existing sync logic works
+    video.audioControls.set(username, { muteBtn, vol });
+    syncVideoTileControls(username);
+
+    wrap.appendChild(controls);
+  }
+
 
   function getToken() {
     const t = localStorage.getItem('access_token');
@@ -1272,7 +1521,7 @@
 
     micData = new Uint8Array(micAnalyser.fftSize);
 
-    const THRESHOLD = 0.030;         // tweak as needed
+    const THRESHOLD = parseFloat(localStorage.getItem('speak_threshold') || 0.030);
     const MIN_FLIP_MS = 220;         // debounce flips
     const SEND_INTERVAL_MS = 250;    // throttle outbound state
 
@@ -1359,6 +1608,224 @@
     return !!(el && typeof el.setSinkId === 'function');
   }
 
+  function activeUserId() {
+    // Works even before myId is set, as long as username is in localStorage.
+    return myId || localStorage.getItem('username') || '';
+  }
+
+  function ukey(k) {
+    const u = activeUserId();
+    return u ? `u:${u}:${k}` : `u:anon:${k}`;
+  }
+
+  function lsGet(k, fallback = null) {
+    const v = localStorage.getItem(ukey(k));
+    return (v === null || v === undefined) ? fallback : v;
+  }
+
+  function lsSet(k, v) {
+    localStorage.setItem(ukey(k), v);
+  }
+
+  function lsDel(k) {
+    localStorage.removeItem(ukey(k));
+  }
+
+  function stopMicTest() {
+    if (micTestRAF) cancelAnimationFrame(micTestRAF);
+    micTestRAF = null;
+    try { micTestCtx?.close(); } catch(e) {}
+    micTestCtx = null;
+    micTestAnalyser = null;
+    micTestData = null;
+    if (micTestStream) {
+      micTestStream.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
+      micTestStream = null;
+    }
+    const fill = document.getElementById('micMeterFill');
+    if (fill) fill.style.width = '0%';
+  }
+
+  async function startMicTest() {
+    stopMicTest();
+
+    // Prefer analyzing the current outgoing stream if already in voice
+    let streamToAnalyze = null;
+
+    if (voice.enabled && voice.localStream) {
+      streamToAnalyze = voice.localStream;
+    } else {
+      const micDeviceId = localStorage.getItem('mic_device_id') || '';
+      try {
+        micTestStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: micDeviceId ? { exact: micDeviceId } : undefined }
+        });
+        streamToAnalyze = micTestStream;
+      } catch (e) {
+        alert('Mic test failed. Check microphone permissions.');
+        return;
+      }
+    }
+
+    micTestCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    const src = micTestCtx.createMediaStreamSource(streamToAnalyze);
+    micTestAnalyser = micTestCtx.createAnalyser();
+    micTestAnalyser.fftSize = 512;
+    micTestAnalyser.smoothingTimeConstant = 0.8;
+
+    src.connect(micTestAnalyser);
+    micTestData = new Uint8Array(micTestAnalyser.fftSize);
+
+    const fill = document.getElementById('micMeterFill');
+
+    function tick() {
+      if (!micTestAnalyser || !micTestData) return;
+      micTestAnalyser.getByteTimeDomainData(micTestData);
+
+      let sum = 0;
+      for (let i = 0; i < micTestData.length; i++) {
+        const v = (micTestData[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / micTestData.length); // ~0..1
+      const pct = clamp(rms * 260, 0, 100); // scaled for visibility
+
+      if (fill) fill.style.width = `${pct}%`;
+      micTestRAF = requestAnimationFrame(tick);
+    }
+
+    tick();
+  }
+
+  async function openAudioModal() {
+    const modal = document.getElementById('audioModal');
+    if (!modal) return;
+    modal.style.display = 'block';
+
+    // Fill device lists
+    try {
+      const { mics, spks } = await listDevices();
+      fillSelect(document.getElementById('micSelect'), mics, lsGet('mic_device_id', ''));
+      fillSelect(document.getElementById('spkSelect'), spks, lsGet('spk_device_id', ''));
+    } catch (e) {
+      console.warn('[audio] enumerateDevices failed', e);
+    }
+
+    // Load values into modal
+    const gain = parseFloat(lsGet('mic_gain', '1'));
+    document.getElementById('micGain').value = String(gain);
+    setText('micGainVal', `${gain.toFixed(2)}x`);
+
+    document.getElementById('optEcho').checked = lsGet('opt_echo', 'true') === 'true';
+    document.getElementById('optNoise').checked = lsGet('opt_noise', 'true') === 'true';
+    document.getElementById('optAgc').checked  = lsGet('opt_agc', 'true') === 'true';
+
+    // New settings
+    document.getElementById('voiceKbps').value = String(lsGet('voice_kbps', '96'));
+
+    const speakT = parseFloat(lsGet('speak_threshold', '0.030'));
+    document.getElementById('speakThresh').value = String(speakT);
+    setText('speakThreshVal', speakT.toFixed(3));
+
+    const mv = (typeof audioPrefs.masterVolume === 'number') ? audioPrefs.masterVolume : 1.0;
+    document.getElementById('masterVol').value = String(mv);
+    setText('masterVolVal', `${Math.round(mv * 100)}%`);
+
+    document.getElementById('optHPF').checked  = lsGet('opt_hpf', 'true') === 'true';
+    document.getElementById('optComp').checked = lsGet('opt_comp', 'true') === 'true';
+    document.getElementById('optGate').checked = lsGet('opt_gate', 'true') === 'true';
+
+    const gt = parseFloat(lsGet('gate_threshold', '0.025'));
+    document.getElementById('gateThresh').value = String(gt);
+    setText('gateThreshVal', gt.toFixed(3));
+
+    renderAudioMixer();
+  }
+
+  async function applyAudioSettings() {
+    const micSelect = document.getElementById('micSelect');
+    const spkSelect = document.getElementById('spkSelect');
+
+    const gainEl = document.getElementById('micGain');
+    const echoEl = document.getElementById('optEcho');
+    const noiseEl = document.getElementById('optNoise');
+    const agcEl = document.getElementById('optAgc');
+
+    const kbpsEl = document.getElementById('voiceKbps');
+    const speakEl = document.getElementById('speakThresh');
+
+    const masterEl = document.getElementById('masterVol');
+
+    const hpfEl = document.getElementById('optHPF');
+    const compEl = document.getElementById('optComp');
+    const gateEl = document.getElementById('optGate');
+    const gateThrEl = document.getElementById('gateThresh');
+
+    // Persist
+    lsSet('mic_device_id', micSelect?.value || '');
+    lsSet('spk_device_id', spkSelect?.value || '');
+
+    lsSet('mic_gain', String(parseFloat(gainEl.value || '1')));
+    lsSet('opt_echo', String(!!echoEl.checked));
+    lsSet('opt_noise', String(!!noiseEl.checked));
+    lsSet('opt_agc', String(!!agcEl.checked));
+
+    lsSet('voice_kbps', String(parseInt(kbpsEl.value || '96', 10)));
+    lsSet('speak_threshold', String(parseFloat(speakEl.value || '0.030')));
+
+    lsSet('opt_hpf', String(!!hpfEl.checked));
+    lsSet('opt_comp', String(!!compEl.checked));
+    lsSet('opt_gate', String(!!gateEl.checked));
+    lsSet('gate_threshold', String(parseFloat(gateThrEl.value || '0.025')));
+
+    // Master output is viewer-side
+    audioPrefs.masterVolume = clamp(parseFloat(masterEl.value || '1'), 0, 1);
+    saveAudioPrefs();
+    applyAudioPrefsToAllSinks();
+
+    // Output device
+    await applySpeakerSelectionToAllSinks();
+
+    // If in a call, rebuild mic stream and replace outgoing track without tearing down the call
+    if (voice.enabled) {
+      try {
+        const micDeviceId = lsGet('mic_device_id', '');
+        const echo = lsGet('opt_echo', 'true') === 'true';
+        const noise = lsGet('opt_noise', 'true') === 'true';
+        const agc  = lsGet('opt_agc', 'true') === 'true';
+        const gain = parseFloat(lsGet('mic_gain', '1'));
+
+        const hpf  = lsGet('opt_hpf', 'true') === 'true';
+        const comp = lsGet('opt_comp', 'true') === 'true';
+        const gate = lsGet('opt_gate', 'true') === 'true';
+        const gateThreshold = parseFloat(lsGet('gate_threshold', '0.025'));
+
+        const out = await buildOutgoingAudioStream({ micDeviceId, echo, noise, agc, gain, hpf, comp, gate, gateThreshold });
+        voice.localStream = out;
+
+        const newTrack = out.getAudioTracks()[0];
+        if (newTrack) await replaceOutgoingAudioTrackOnPeers(newTrack);
+
+        await applyAudioParamsOnAllPeers();
+        startMicActivityMonitor(); // picks up new speak_threshold
+
+        document.getElementById('audioMsg').textContent = 'Applied (live).';
+      } catch (e) {
+        console.error('[audio] apply failed', e);
+        document.getElementById('audioMsg').textContent = 'Apply failed. Check mic permissions.';
+      }
+    } else {
+      document.getElementById('audioMsg').textContent = 'Saved.';
+    }
+  }
+
+  function portalToBody(id) {
+    const el = document.getElementById(id);
+    if (el && el.parentElement !== document.body) {
+      document.body.appendChild(el); // moves the node, preserves listeners
+    }
+  }
+
   async function listDevices() {
     // You generally only get full labels after permission is granted once.
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -1377,8 +1844,6 @@
       selectEl.appendChild(opt);
     });
   }
-
-
 
   function setPinsButtonState(isOpen) {
     const btn = document.getElementById('viewPinsBtn');
@@ -1618,16 +2083,24 @@
     sendVoiceSignal(peerUsername, { kind: "renegotiate" });
   }
 
-  async function applyAudioSenderParams(pc, maxKbps = 64) {
+  async function applyAudioSenderParams(pc, maxKbps = 96) {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
     if (!sender || typeof sender.getParameters !== 'function') return;
 
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-    params.encodings[0].maxBitrate = Math.max(24, maxKbps) * 1000;
+
+    params.encodings[0].maxBitrate = clamp(Number(maxKbps || 96), 24, 192) * 1000;
 
     try { await sender.setParameters(params); } catch (e) {
       console.warn('[webrtc] setParameters(audio) failed', e);
+    }
+  }
+
+  async function applyAudioParamsOnAllPeers() {
+    const kbps = Number(lsGet('voice_kbps', '96'));
+    for (const [, pc] of voice.pcs.entries()) {
+      await applyAudioSenderParams(pc, kbps);
     }
   }
 
@@ -1817,6 +2290,8 @@
 
 
   function setStageVisible(on) {
+    if (stageState.theatre) return;
+
     const stage = document.getElementById('videoStage');
     if (!stage) return;
 
@@ -1980,10 +2455,16 @@
     const noise = (localStorage.getItem('opt_noise') ?? 'true') === 'true';
     const agc  = (localStorage.getItem('opt_agc') ?? 'true') === 'true';
     const gain = parseFloat(localStorage.getItem('mic_gain') || '1');
+    const hpf  = (localStorage.getItem('opt_hpf') ?? 'true') === 'true';
+    const comp = (localStorage.getItem('opt_comp') ?? 'true') === 'true';
+    const gate = (localStorage.getItem('opt_gate') ?? 'true') === 'true';
+    const gateThreshold = parseFloat(localStorage.getItem('gate_threshold') || '0.025');
 
-    const outAudio = await buildOutgoingAudioStream({ micDeviceId, echo, noise, agc, gain });
+    const outAudio = await buildOutgoingAudioStream({
+      micDeviceId, echo, noise, agc, gain,
+      hpf, comp, gate, gateThreshold
+    });
 
-    // voice.localStream should be the stream you add tracks from
     voice.localStream = outAudio;
 
     voice.enabled = true;
@@ -2009,39 +2490,102 @@
   }
 
 
-  async function buildOutgoingAudioStream({ micDeviceId, echo, noise, agc, gain }) {
-    // Stop existing raw stream tracks if we created them here
+  async function buildOutgoingAudioStream({
+    micDeviceId,
+    echo,
+    noise,
+    agc,
+    gain,
+    hpf,
+    comp,
+    gate,
+    gateThreshold
+  }) {
     if (audioGraph.rawStream) {
       audioGraph.rawStream.getTracks().forEach(t => { try{ t.stop(); } catch(e){} });
     }
     teardownAudioGraph();
 
-    const constraints = {
-      audio: {
-        deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
-        echoCancellation: !!echo,
-        noiseSuppression: !!noise,
-        autoGainControl: !!agc,
-
-        channelCount: 1,
-        sampleRate: 48000,
-        sampleSize: 16
-      }
+    const base = {
+      deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+      echoCancellation: !!echo,
+      noiseSuppression: !!noise,
+      autoGainControl: !!agc,
     };
 
-    const raw = await navigator.mediaDevices.getUserMedia(constraints);
+    const attempts = [
+      { audio: { ...base, channelCount: 1, sampleRate: { ideal: 48000 }, sampleSize: 16 } },
+      { audio: { ...base } },
+      { audio: true }
+    ];
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let raw = null;
+    let lastErr = null;
+    for (const c of attempts) {
+      try {
+        raw = await navigator.mediaDevices.getUserMedia(c);
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn('[audio] getUserMedia failed with', c, e.name, e.message);
+      }
+    }
+    if (!raw) throw (lastErr || new Error('getUserMedia(audio) failed'));
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     const src = ctx.createMediaStreamSource(raw);
+
+    let node = src;
+
+    let hpfNode = null;
+    if (hpf) {
+      hpfNode = ctx.createBiquadFilter();
+      hpfNode.type = 'highpass';
+      hpfNode.frequency.value = 80;     // voice-friendly rumble cut
+      hpfNode.Q.value = 0.707;
+      node.connect(hpfNode);
+      node = hpfNode;
+    }
+
+    let gateNode = null;
+    if (gate && ctx.audioWorklet) {
+      try {
+        await ctx.audioWorklet.addModule(ensureGateWorkletUrl());
+        gateNode = new AudioWorkletNode(ctx, 'noise-gate', {
+          parameterData: {
+            threshold: clamp(Number(gateThreshold || 0.025), 0.001, 1),
+            attack: 0.010,
+            release: 0.120,
+          }
+        });
+        node.connect(gateNode);
+        node = gateNode;
+      } catch (e) {
+        console.warn('[audio] gate worklet unavailable; continuing without gate', e);
+      }
+    }
+
+    let compNode = null;
+    if (comp) {
+      compNode = ctx.createDynamicsCompressor();
+      compNode.threshold.value = -18;
+      compNode.knee.value = 12;
+      compNode.ratio.value = 3;
+      compNode.attack.value = 0.003;
+      compNode.release.value = 0.250;
+
+      node.connect(compNode);
+      node = compNode;
+    }
+
     const gainNode = ctx.createGain();
     gainNode.gain.value = (typeof gain === 'number' ? gain : 1);
 
     const dest = ctx.createMediaStreamDestination();
-    src.connect(gainNode);
+    node.connect(gainNode);
     gainNode.connect(dest);
 
-    audioGraph = { ctx, src, gainNode, dest, rawStream: raw, outStream: dest.stream };
-
+    audioGraph = { ctx, src, gainNode, dest, rawStream: raw, outStream: dest.stream, hpfNode, gateNode, compNode };
     return dest.stream;
   }
 
@@ -2080,7 +2624,7 @@
 
   function leaveVoice() {
     if (!voice.enabled) return;
-
+    try { if (stageState.theatre) exitTheatre(); } catch(e) {}
     try { stopCamera(); } catch(e) {}
 
     // inform room
@@ -2312,229 +2856,229 @@
 
 
   function renderMessage(msg, isLocalEcho=false, prevMsg=null) {
-  // if message flagged deleted, skip rendering (safety)
-  if (msg.deleted) return document.createElement('div');
+    // if message flagged deleted, skip rendering (safety)
+    if (msg.deleted) return document.createElement('div');
 
-  msgIndex[msg.id] = msg;
+    msgIndex[msg.id] = msg;
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'message';
-  wrapper.id = 'msg-' + msg.id;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message';
+    wrapper.id = 'msg-' + msg.id;
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'msg-toolbar';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'msg-toolbar';
 
-  const reactionsInline = document.createElement('div');
-  reactionsInline.className = 'reactions-inline';
+    const reactionsInline = document.createElement('div');
+    reactionsInline.className = 'reactions-inline';
 
-  toolbar.appendChild(reactionsInline);
+    toolbar.appendChild(reactionsInline);
 
-  // --- grouping logic (discord-like) ---
-  const grouped = isGroupedContinuation(prevMsg, msg);
-  if (grouped) wrapper.classList.add('continuation');
+    // --- grouping logic (discord-like) ---
+    const grouped = isGroupedContinuation(prevMsg, msg);
+    if (grouped) wrapper.classList.add('continuation');
 
-  // avatar
-  const avatar = document.createElement('div');
-  avatar.className = 'avatar';
-  avatar.textContent = (msg.author && msg.author[0]) ? msg.author[0].toUpperCase() : '?';
-  if (grouped) avatar.classList.add('ghost');
+    // avatar
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = (msg.author && msg.author[0]) ? msg.author[0].toUpperCase() : '?';
+    if (grouped) avatar.classList.add('ghost');
 
-  // body (meta + content)
-  const body = document.createElement('div');
-  body.className = 'message-body';
+    // body (meta + content)
+    const body = document.createElement('div');
+    body.className = 'message-body';
 
-  const meta = document.createElement('div');
-  meta.className = 'meta';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
 
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'name';
-  nameSpan.textContent = msg.author;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.textContent = msg.author;
 
-  const timeSpan = document.createElement('span');
-  timeSpan.className = 'time';
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'time';
 
     // Only show meta (name/time) on the first in a run
-  if (grouped) {
-    meta.classList.add('hidden');
-  } else {
-    meta.appendChild(nameSpan);
-
-    // timestamp visibility using your existing rule
-    const showTime = shouldShowTimestamp(prevMsg, msg, true);
-    if (showTime) {
-      try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent=''; }
+    if (grouped) {
+      meta.classList.add('hidden');
     } else {
-      timeSpan.textContent = '';
-    }
-    meta.appendChild(timeSpan);
+      meta.appendChild(nameSpan);
 
-    if (msg.edited_at) {
-      const editedSpan = document.createElement('span');
-      editedSpan.className = 'edited';
-      editedSpan.textContent = '(edited)';
-      meta.appendChild(editedSpan);
-    }
-  }
-
-  body.appendChild(meta);
-
-  // --- inline reply preview (clickable) ---
-  if (msg.reply_to) {
-    const qr = document.createElement('div');
-    qr.className = 'inline-reply-preview';
-    qr.style.background = '#0b0c0e';
-    qr.style.padding = '6px';
-    qr.style.borderLeft = '3px solid rgba(255,255,255,0.03)';
-    qr.style.borderRadius = '6px';
-    qr.style.marginBottom = '6px';
-    qr.style.color = 'var(--muted)';
-    qr.style.fontSize = '13px';
-    qr.style.cursor = 'pointer';
-    // show short preview from local cache if available, else placeholder
-    const quoted = msgIndex[msg.reply_to];
-    qr.textContent = quoted ? ((quoted.deleted ? '(original deleted)' : (String(quoted.content || '').slice(0,120)))) : '(quoted message)';
-    // click -> scroll to referenced message
-    qr.onclick = (ev) => {
-      ev.stopPropagation();
-      const target = document.getElementById('msg-' + msg.reply_to);
-      const wrapper = document.querySelector('.chat-wrapper');
-      if (target && wrapper) {
-        // smooth scroll target into center of wrapper
-        const targetTop = target.offsetTop;
-        const centerOffset = Math.round((wrapper.clientHeight / 2) - (target.clientHeight / 2));
-        wrapper.scrollTo({ top: Math.max(0, targetTop - centerOffset), behavior: 'smooth' });
-        // briefly highlight to give feedback
-        target.classList.add('referenced');
-        setTimeout(()=> target.classList.remove('referenced'), 1400);
-      }
-    };
-    body.appendChild(qr);
-  }
-
-
-  const content = document.createElement('div');
-  content.className = 'content';
-
-  const text = (msg.content || "").toString();
-  if (isImageUrl(text)) {
-    const img = document.createElement('img');
-    img.src = text;
-    img.style.maxWidth = '300px';
-    img.style.borderRadius = '6px';
-    content.appendChild(img);
-
-    // GIF favorite button (if you have favorites)
-    const gifKey = getGifKeyFromUrl(text);
-    const favBtn = document.createElement('button');
-    favBtn.className = 'gif-fav-btn';
-    const favId = favoriteMap[gifKey];
-    favBtn.textContent = favId ? '♥' : '♡';
-    favBtn.title = favId ? 'Unfavorite' : 'Favorite';
-    favBtn.style.marginLeft = '8px';
-    favBtn.onclick = async (e) => {
-      e.stopPropagation();
-      const token = getToken();
-      if (!token) { alert('Log in to favorite GIFs'); return; }
-      if (favoriteMap[gifKey]) {
-        const fid = favoriteMap[gifKey];
-        const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
-        if (res.ok) { 
-          removeFavoriteEntriesById(fid); 
-          updateGifFavUI(gifKey); 
-          favBtn.textContent='♡'; 
-        }
+      // timestamp visibility using your existing rule
+      const showTime = shouldShowTimestamp(prevMsg, msg, true);
+      if (showTime) {
+        try { timeSpan.textContent = new Date(msg.timestamp).toLocaleString(); } catch(e){ timeSpan.textContent=''; }
       } else {
-        const payload = { gif_id: gifKey, url: text, preview: text, title: '' };
-        const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
-
-        if (res.ok) {
-          const j = await res.json().catch(()=>({}));
-          if (j.id) {
-            favoriteMap[String(gifKey)] = j.id;
-
-            if (j.gif_id) favoriteMap[String(j.gif_id)] = j.id;
-
-            if (j.original_gif_id) favoriteMap[String(j.original_gif_id)] = j.id;
-          }
-          favBtn.textContent='♥';
-          updateGifFavUI(gifKey);
-        }
+        timeSpan.textContent = '';
       }
-    };
-    content.appendChild(favBtn);
+      meta.appendChild(timeSpan);
 
-  } else if (isVideoUrl(text)) {
-    const vid = document.createElement('video');
-    vid.src = text;
-    vid.controls = true;
-    vid.style.maxWidth = '400px';
-    content.appendChild(vid);
-  } else {
-    const html = marked.parse(text);
-    content.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
-  }
+      if (msg.edited_at) {
+        const editedSpan = document.createElement('span');
+        editedSpan.className = 'edited';
+        editedSpan.textContent = '(edited)';
+        meta.appendChild(editedSpan);
+      }
+    }
 
-  body.appendChild(content);
+    body.appendChild(meta);
 
-  // reactions area
-  const reactionsBar = document.createElement('div');
+    // --- inline reply preview (clickable) ---
+    if (msg.reply_to) {
+      const qr = document.createElement('div');
+      qr.className = 'inline-reply-preview';
+      qr.style.background = '#0b0c0e';
+      qr.style.padding = '6px';
+      qr.style.borderLeft = '3px solid rgba(255,255,255,0.03)';
+      qr.style.borderRadius = '6px';
+      qr.style.marginBottom = '6px';
+      qr.style.color = 'var(--muted)';
+      qr.style.fontSize = '13px';
+      qr.style.cursor = 'pointer';
+      // show short preview from local cache if available, else placeholder
+      const quoted = msgIndex[msg.reply_to];
+      qr.textContent = quoted ? ((quoted.deleted ? '(original deleted)' : (String(quoted.content || '').slice(0,120)))) : '(quoted message)';
+      // click -> scroll to referenced message
+      qr.onclick = (ev) => {
+        ev.stopPropagation();
+        const target = document.getElementById('msg-' + msg.reply_to);
+        const wrapper = document.querySelector('.chat-wrapper');
+        if (target && wrapper) {
+          // smooth scroll target into center of wrapper
+          const targetTop = target.offsetTop;
+          const centerOffset = Math.round((wrapper.clientHeight / 2) - (target.clientHeight / 2));
+          wrapper.scrollTo({ top: Math.max(0, targetTop - centerOffset), behavior: 'smooth' });
+          // briefly highlight to give feedback
+          target.classList.add('referenced');
+          setTimeout(()=> target.classList.remove('referenced'), 1400);
+        }
+      };
+      body.appendChild(qr);
+    }
 
-  const reactionEntries = (msg.reactions && typeof msg.reactions === 'object')
-    ? Object.entries(msg.reactions)
-    : [];
 
-  const hasReactions = reactionEntries.some(([emoji, users]) => Array.isArray(users) && users.length > 0);
-  if (hasReactions) wrapper.classList.add('has-reactions');
+    const content = document.createElement('div');
+    content.className = 'content';
 
-  reactionEntries.forEach(([emoji, users]) => {
-    const list = Array.isArray(users) ? users : [];
-    if (!list.length) return;
+    const text = (msg.content || "").toString();
+    if (isImageUrl(text)) {
+      const img = document.createElement('img');
+      img.src = text;
+      img.style.maxWidth = '300px';
+      img.style.borderRadius = '6px';
+      content.appendChild(img);
 
-    const rbtn = document.createElement('button');
-    rbtn.className = 'reaction-btn';
-    rbtn.textContent = `${emoji} ${list.length}`;
+      // GIF favorite button (if you have favorites)
+      const gifKey = getGifKeyFromUrl(text);
+      const favBtn = document.createElement('button');
+      favBtn.className = 'gif-fav-btn';
+      const favId = favoriteMap[gifKey];
+      favBtn.textContent = favId ? '♥' : '♡';
+      favBtn.title = favId ? 'Unfavorite' : 'Favorite';
+      favBtn.style.marginLeft = '8px';
+      favBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const token = getToken();
+        if (!token) { alert('Log in to favorite GIFs'); return; }
+        if (favoriteMap[gifKey]) {
+          const fid = favoriteMap[gifKey];
+          const res = await fetch('/gif/favorite?id=' + encodeURIComponent(fid), { method: 'DELETE', headers: { token }});
+          if (res.ok) { 
+            removeFavoriteEntriesById(fid); 
+            updateGifFavUI(gifKey); 
+            favBtn.textContent='♡'; 
+          }
+        } else {
+          const payload = { gif_id: gifKey, url: text, preview: text, title: '' };
+          const res = await fetch('/gif/favorite', { method:'POST', headers: {'Content-Type':'application/json', token}, body: JSON.stringify(payload) });
 
-    // Hover tooltip: who reacted (display names)
-    const names = list.map(u => displayNameForUser(u));
-    const tipText = names.join(', ');
-    rbtn.title = tipText; // fallback tooltip
+          if (res.ok) {
+            const j = await res.json().catch(()=>({}));
+            if (j.id) {
+              favoriteMap[String(gifKey)] = j.id;
 
-    rbtn.addEventListener('mouseenter', (ev) => {
-      showReactionTooltip(tipText, ev.clientX, ev.clientY);
+              if (j.gif_id) favoriteMap[String(j.gif_id)] = j.id;
+
+              if (j.original_gif_id) favoriteMap[String(j.original_gif_id)] = j.id;
+            }
+            favBtn.textContent='♥';
+            updateGifFavUI(gifKey);
+          }
+        }
+      };
+      content.appendChild(favBtn);
+
+    } else if (isVideoUrl(text)) {
+      const vid = document.createElement('video');
+      vid.src = text;
+      vid.controls = true;
+      vid.style.maxWidth = '400px';
+      content.appendChild(vid);
+    } else {
+      const html = marked.parse(text);
+      content.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    }
+
+    body.appendChild(content);
+
+    // reactions area
+    const reactionsBar = document.createElement('div');
+
+    const reactionEntries = (msg.reactions && typeof msg.reactions === 'object')
+      ? Object.entries(msg.reactions)
+      : [];
+
+    const hasReactions = reactionEntries.some(([emoji, users]) => Array.isArray(users) && users.length > 0);
+    if (hasReactions) wrapper.classList.add('has-reactions');
+
+    reactionEntries.forEach(([emoji, users]) => {
+      const list = Array.isArray(users) ? users : [];
+      if (!list.length) return;
+
+      const rbtn = document.createElement('button');
+      rbtn.className = 'reaction-btn';
+      rbtn.textContent = `${emoji} ${list.length}`;
+
+      // Hover tooltip: who reacted (display names)
+      const names = list.map(u => displayNameForUser(u));
+      const tipText = names.join(', ');
+      rbtn.title = tipText; // fallback tooltip
+
+      rbtn.addEventListener('mouseenter', (ev) => {
+        showReactionTooltip(tipText, ev.clientX, ev.clientY);
+      });
+      rbtn.addEventListener('mousemove', (ev) => {
+        showReactionTooltip(tipText, ev.clientX, ev.clientY);
+      });
+      rbtn.addEventListener('mouseleave', () => {
+        hideReactionTooltip();
+      });
+
+      // Click toggles reaction (your existing behavior)
+      rbtn.onclick = () => {
+        hideReactionTooltip();
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+      };
+
+      reactionsBar.appendChild(rbtn);
     });
-    rbtn.addEventListener('mousemove', (ev) => {
-      showReactionTooltip(tipText, ev.clientX, ev.clientY);
-    });
-    rbtn.addEventListener('mouseleave', () => {
-      hideReactionTooltip();
-    });
 
-    // Click toggles reaction (your existing behavior)
-    rbtn.onclick = () => {
+    // Add reaction "+" (only visible on hover unless message already has reactions)
+    const addReactBtn = document.createElement('button');
+    addReactBtn.className = 'add-react-btn';
+    addReactBtn.textContent = '+';
+    addReactBtn.title = 'Add reaction';
+    addReactBtn.onclick = (ev) => {
       hideReactionTooltip();
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+      openEmojiPicker(addReactBtn, (emoji) => {
+        socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
+      });
+      ev.stopPropagation?.();
     };
 
-    reactionsBar.appendChild(rbtn);
-  });
-
-  // Add reaction "+" (only visible on hover unless message already has reactions)
-  const addReactBtn = document.createElement('button');
-  addReactBtn.className = 'add-react-btn';
-  addReactBtn.textContent = '+';
-  addReactBtn.title = 'Add reaction';
-  addReactBtn.onclick = (ev) => {
-    hideReactionTooltip();
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    openEmojiPicker(addReactBtn, (emoji) => {
-      socket.send(JSON.stringify({ type: 'react', id: msg.id, emoji }));
-    });
-    ev.stopPropagation?.();
-  };
-
-  reactionsInline.appendChild(addReactBtn);
-  body.appendChild(reactionsBar);
+    reactionsInline.appendChild(addReactBtn);
+    body.appendChild(reactionsBar);
 
     // actions (pin/copy/reply/delete/edit) - keep small and unobtrusive
     const actions = document.createElement('div');
@@ -2786,38 +3330,45 @@
 
   const stageState = {
     primaryScreenUser: null,
+    primaryNode: null,
     hiddenScreens: new Set(),
+    savedTrayOrder: [],
+    theatre: false
   };
+
+  stageState.theatre = false;
+  stageState.savedTrayOrder = [];
 
   function ensureVideoTile(username, isLocal=false) {
     if (!voice.enabled) return null;
 
-    setStageVisible(true);
-    const stage = document.getElementById('videoStage');
+    if (!stageState.theatre) setStageVisible(true);
 
     let el = video.tiles.get(username);
     if (el) return el;
 
-    // tile box
-    const box = document.createElement('div');
-    box.style.position = 'relative';
-    box.style.width = '240px';
-    box.style.height = '160px';
-    box.style.borderRadius = '10px';
-    box.style.overflow = 'hidden';
-    box.style.background = '#000';
+    const wrap = document.createElement('div');
+    wrap.className = 'stage-tile video-tile';
+    wrap.dataset.user = username;
+    wrap.dataset.type = 'video';
 
-    // video element
+    const box = document.createElement('div');
+    box.className = 'tile-box';
+
+    box.addEventListener('click', (ev) => {
+      if (ev.target.closest('.tile-controls')) return;
+      handleTileSurfaceClick(wrap);
+    });
+
     el = document.createElement('video');
     el.autoplay = true;
     el.playsInline = true;
     el.muted = !!isLocal;
     el.style.width = '100%';
     el.style.height = '100%';
-    el.style.objectFit = 'cover';
+    el.style.objectFit = 'cover';     // camera
     el.style.display = 'block';
 
-    // overlay placeholder (shown when no video stream)
     const overlay = document.createElement('div');
     overlay.style.position = 'absolute';
     overlay.style.inset = '0';
@@ -2826,16 +3377,11 @@
     overlay.style.justifyContent = 'center';
     overlay.style.background = '#0b0c0e';
 
-    // avatar circle w/ initial + optional color
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
     avatar.style.width = '64px';
     avatar.style.height = '64px';
     avatar.style.fontSize = '22px';
-    avatar.style.borderRadius = '50%';
-    avatar.style.display = 'flex';
-    avatar.style.alignItems = 'center';
-    avatar.style.justifyContent = 'center';
 
     const prof = userDirectory[username] || {};
     const shownName = prof.display_name || username;
@@ -2844,73 +3390,55 @@
 
     overlay.appendChild(avatar);
 
+    // Top-right controls (same ops as screen tiles)
+    const controlsTop = document.createElement('div');
+    controlsTop.className = 'tile-controls';
+
+    const fsBtn = document.createElement('button');
+    fsBtn.textContent = '⤢';
+    fsBtn.title = 'Fullscreen';
+    fsBtn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(box); };
+    controlsTop.appendChild(fsBtn);
+
+    const hideBtn = document.createElement('button');
+    hideBtn.textContent = 'Hide';
+    hideBtn.title = 'Hide this tile';
+    hideBtn.onclick = (e) => {
+      e.stopPropagation();
+      removeVideoTile(username);
+      if (stageState.theatre) relayoutTheatre();
+    };
+    controlsTop.appendChild(hideBtn);
+
     box.appendChild(el);
     box.appendChild(overlay);
-
-    const wrap = document.createElement('div');
-    wrap.className = 'video-tile';
-    wrap.dataset.user = username;
-    wrap.style.display = 'grid';
-    wrap.style.gap = '6px';
-
-    const prof2 = userDirectory[username] || {};
-    const shown2 = prof2.display_name || username;
+    box.appendChild(controlsTop);
 
     const label = document.createElement('div');
-    label.textContent = shown2;
+    label.textContent = shownName;
     label.style.color = 'var(--muted)';
     label.style.fontSize = '12px';
 
-    // Controls under tile (remote only): mute + volume
-    if (!isLocal) {
-      const controls = document.createElement('div');
-      controls.style.display = 'flex';
-      controls.style.gap = '8px';
-      controls.style.alignItems = 'center';
+    wrap.appendChild(box);
+    wrap.appendChild(label);
 
-      const muteBtn = document.createElement('button');
-      muteBtn.className = 'btn-small';
-      muteBtn.title = 'Client-side mute (you only)';
-      muteBtn.onclick = (e) => {
-        e.stopPropagation();
-        toggleUserMute(username);
-      };
+    // Remote audio controls for camera tiles
+    if (!isLocal) appendRemoteAudioControls(username, wrap);
 
-      const vol = document.createElement('input');
-      vol.type = 'range';
-      vol.min = '0';
-      vol.max = '1';
-      vol.step = '0.05';
-      vol.title = 'Client-side volume';
-      vol.oninput = (e) => {
-        e.stopPropagation();
-        setUserVolume(username, parseFloat(vol.value));
-      };
-
-      controls.appendChild(muteBtn);
-      controls.appendChild(vol);
-
-      // store refs so we can sync text/value/disabled state
-      video.audioControls.set(username, { muteBtn, vol });
-      // initialize UI state
-      syncVideoTileControls(username);
-
-      wrap.appendChild(box);
-      wrap.appendChild(label);
-      wrap.appendChild(controls);
-    } else {
-      wrap.appendChild(box);
-      wrap.appendChild(label);
-    }
-
-    stage.appendChild(wrap);
+    const host = currentTrayHost();
+    host.appendChild(wrap);
+    rememberTrayNode(wrap);
 
     video.tiles.set(username, el);
     video.overlays.set(username, overlay);
 
-
-    // start with overlay visible
     overlay.style.display = 'flex';
+
+    // If we’re in theatre and nothing is primary yet, make this primary
+    if (stageState.theatre && !stageState.primaryNode) {
+      stageState.primaryNode = wrap;
+      relayoutTheatre();
+    }
 
     return el;
   }
@@ -2925,17 +3453,20 @@
     const el = video.tiles.get(username);
     if (!el) return;
 
-    // remove the full tile wrapper (box + label + controls)
-    const wrap = el.closest('.video-tile') || el.parentElement?.parentElement || el.parentElement;
+    const wrap = el.closest('.video-tile') || el.closest('.stage-tile') || el.parentElement;
     try { wrap?.remove(); } catch(e){}
 
     video.tiles.delete(username);
     video.overlays.delete(username);
     video.audioControls?.delete(username);
 
-    // hide stage if no tiles
-    const stage = document.getElementById('videoStage');
-    if (stage && video.tiles.size === 0) setStageVisible(false);
+    if (wrap) {
+      stageState.savedTrayOrder = (stageState.savedTrayOrder || []).filter(n => n !== wrap);
+      if (stageState.primaryNode === wrap) stageState.primaryNode = null;
+    }
+
+    if (stageState.theatre) relayoutTheatre();
+    else refreshTrayVisibility();
   }
 
   function setScreenStageVisible(on){
@@ -2963,7 +3494,6 @@
       }
     }
   }
-
 
   function setPrimaryScreen(username) {
     stageState.primaryScreenUser = username;
@@ -3010,43 +3540,159 @@
     }
   }
 
+  function computeScreenStageHeight() {
+    // Max height so we don't collide with composer/reply/typing bars.
+    const topSafe = getTopSafeY();
+    const bottomSafe = getBottomSafeY();
+    const maxAvail = Math.max(320, Math.floor(bottomSafe - topSafe - 12));
+    const target = Math.floor(window.innerHeight * 0.65);
+    return clamp(target, 320, maxAvail);
+  }
+
+  function currentTrayHost() {
+    // While in theatre, we want new tiles to show in the theatre side rail.
+    if (stageState.theatre) {
+      return document.getElementById('screenSide') || document.getElementById('videoStage');
+    }
+    return document.getElementById('videoStage');
+  }
+
+  function rememberTrayNode(node) {
+    if (!stageState.theatre) return;
+    if (!stageState.savedTrayOrder.includes(node)) stageState.savedTrayOrder.push(node);
+  }
+
+  function enterTheatre(primaryWrap){
+    const tray = document.getElementById('videoStage');
+    const st   = document.getElementById('screenStage');
+    if (!tray || !st) return;
+
+    stageState.theatre = true;
+    stageState.primaryNode = primaryWrap || null;
+
+    // snapshot current tray order
+    stageState.savedTrayOrder = Array.from(tray.children || []);
+    if (primaryWrap && !stageState.savedTrayOrder.includes(primaryWrap)) {
+      stageState.savedTrayOrder.unshift(primaryWrap);
+    }
+
+    const h = computeScreenStageHeight();
+    document.documentElement.style.setProperty('--stage-height', `${h}px`);
+    document.documentElement.style.setProperty('--screen-stage-height', `${h}px`);
+
+    st.style.display = 'grid';
+    st.style.height = `${h}px`;
+    st.classList.add('theatre');
+
+    tray.style.display = 'none';
+
+    relayoutTheatre();
+  }
+
+  function relayoutTheatre(){
+    if (!stageState.theatre) return;
+
+    const primaryHost = document.getElementById('screenPrimary');
+    const sideHost    = document.getElementById('screenSide');
+    const st          = document.getElementById('screenStage');
+    if (!primaryHost || !sideHost || !st) return;
+
+    primaryHost.innerHTML = '';
+    sideHost.innerHTML = '';
+
+    const nodes = uniqueNodes(stageState.savedTrayOrder).filter(n => {
+      const t = n?.dataset?.type || '';
+      const u = n?.dataset?.user || '';
+      if (t === 'screen' && stageState.hiddenScreens.has(u)) return false;
+      return true;
+    });
+
+    if (!nodes.length) {
+      exitTheatre();
+      return;
+    }
+
+    if (!stageState.primaryNode || !nodes.includes(stageState.primaryNode)) {
+      stageState.primaryNode = nodes[0];
+    }
+
+    primaryHost.appendChild(stageState.primaryNode);
+    nodes.forEach(n => {
+      if (n === stageState.primaryNode) return;
+      sideHost.appendChild(n);
+    });
+  }
+
+  function exitTheatre(){
+    const tray = document.getElementById('videoStage');
+    const st   = document.getElementById('screenStage');
+    const primaryHost = document.getElementById('screenPrimary');
+    const sideHost    = document.getElementById('screenSide');
+
+    stageState.theatre = false;
+    stageState.primaryNode = null;
+    stageState.primaryScreenUser = null; // keep compatibility
+
+    if (primaryHost) primaryHost.innerHTML = '';
+    if (sideHost) sideHost.innerHTML = '';
+
+    if (st) {
+      st.style.display = 'none';
+      st.classList.remove('theatre');
+    }
+
+    if (tray) {
+      tray.innerHTML = '';
+      uniqueNodes(stageState.savedTrayOrder).forEach(n => { if (n) tray.appendChild(n); });
+      stageState.savedTrayOrder = [];
+    }
+
+    refreshTrayVisibility();
+  }
+
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && stageState.theatre && !document.fullscreenElement) exitTheatre();
+  });
+  window.addEventListener('resize', () => {
+    if (stageState.theatre) {
+      const h = computeScreenStageHeight();
+      document.documentElement.style.setProperty('--stage-height', `${h}px`);
+      document.documentElement.style.setProperty('--screen-stage-height', `${h}px`);
+      const st = document.getElementById('screenStage');
+      if (st) st.style.height = `${h}px`;
+    }
+  });
+
 
   function ensureScreenTile(username, isLocal=false){
     if (!voice.enabled) return null;
 
-    // init maps
     screenShare.wraps = screenShare.wraps || new Map();
 
     let el = screenShare.tiles.get(username);
     if (el) return el;
 
     const wrap = document.createElement('div');
-    wrap.className = 'stage-tile';
+    wrap.className = 'stage-tile screen-tile';
     wrap.dataset.user = username;
+    wrap.dataset.type = 'screen';
 
     const box = document.createElement('div');
     box.className = 'tile-box';
-    box.style.width = '100%';
-    box.style.height = '260px';
 
     box.addEventListener('click', (ev) => {
       if (ev.target.closest('.tile-controls')) return;
-      toggleFullscreen(box);
-    });
-
-    // 3) Optional: double-click promotes to primary (keeps your theatre UX)
-    box.addEventListener('dblclick', (ev) => {
-      if (ev.target.closest('.tile-controls')) return;
-      setPrimaryScreen(username);
+      handleTileSurfaceClick(wrap);
     });
 
     el = document.createElement('video');
     el.autoplay = true;
     el.playsInline = true;
-    el.muted = !!isLocal;          // local always muted
+    el.muted = !!isLocal;
     el.style.width = '100%';
     el.style.height = '100%';
-    el.style.objectFit = 'contain';
+    el.style.objectFit = 'contain';   // screen share
     el.style.display = 'block';
 
     const overlay = document.createElement('div');
@@ -3060,134 +3706,43 @@
     overlay.style.fontSize = '13px';
     overlay.textContent = 'No screen stream';
 
-    // Controls (viewer-side)
-    const controls = document.createElement('div');
-    controls.className = 'tile-controls';
+    const controlsTop = document.createElement('div');
+    controlsTop.className = 'tile-controls';
 
     const fsBtn = document.createElement('button');
     fsBtn.textContent = '⤢';
     fsBtn.title = 'Fullscreen';
-    fsBtn.onclick = (e) => { e.stopPropagation(); makeFullscreen(box); };
-    controls.appendChild(fsBtn);
-
-    if (!isLocal) {
-      const muteUserBtn = document.createElement('button');
-      const muteStreamBtn = document.createElement('button');
-
-      const syncText = () => {
-        const isUserMuted = audioPrefs.mutedUsers.has(username);
-        muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
-
-        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
-      };
-
-      muteUserBtn.title = 'Client-side: mutes the audio sink from this user';
-      muteUserBtn.onclick = (e) => { e.stopPropagation(); toggleUserMute(username); syncText(); };
-
-      muteStreamBtn.title = 'Mutes the <video> element only (often not the real audio path)';
-      muteStreamBtn.onclick = (e) => { e.stopPropagation(); el.muted = !el.muted; syncText(); };
-
-      controls.appendChild(muteUserBtn);
-      controls.appendChild(muteStreamBtn);
-
-      syncText();
-
-      if (audioPrefs.deafened) {
-        muteUserBtn.disabled = true;
-        muteStreamBtn.disabled = true;
-      }
-    }
+    fsBtn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(box); };
+    controlsTop.appendChild(fsBtn);
 
     const hideBtn = document.createElement('button');
     hideBtn.textContent = 'Hide';
     hideBtn.title = 'Hide this stream';
     hideBtn.onclick = (e) => {
       e.stopPropagation();
-      stageState.hiddenScreens.add(username);
-      relayoutScreenStage();
-    };
-    controls.appendChild(hideBtn);
-
-
-    // Only show volume/mute controls for remote streams
-    if (!isLocal) {
-      const muteUserBtn = document.createElement('button');
-      const syncText = () => {
-        const isUserMuted = audioPrefs.mutedUsers.has(username);
-        muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
-      };
-      syncText();
-      muteUserBtn.title = 'Client-side: mute everything you hear from this user';
-      muteUserBtn.onclick = (e) => {
-        e.stopPropagation();
-        toggleUserMute(username);
-        syncText();
-      };
-      controls.appendChild(muteUserBtn);
-
-      // Optional: keep your existing video-element mute as "Mute Video Element"
-      const muteStreamBtn = document.createElement('button');
-      muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
-      muteStreamBtn.title = 'Mute the <video> element (may not affect audio sink)';
-      muteStreamBtn.onclick = (e) => {
-        e.stopPropagation();
-        el.muted = !el.muted;
-        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
-      };
-      controls.appendChild(muteStreamBtn);
-
-      // Only show volume/mute controls for remote streams
-      if (!isLocal) {
-        const muteUserBtn = document.createElement('button');
-
-        const syncText = () => {
-          const isUserMuted = audioPrefs.mutedUsers.has(username);
-          muteUserBtn.textContent = isUserMuted ? 'Unmute User' : 'Mute User';
-        };
-
-        syncText();
-        muteUserBtn.title = 'Client-side: mute everything you hear from this user';
-        muteUserBtn.onclick = (e) => {
-          e.stopPropagation();
-          toggleUserMute(username);
-          syncText();
-        };
-        controls.appendChild(muteUserBtn);
-
-        const muteStreamBtn = document.createElement('button');
-        muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
-        muteStreamBtn.title = 'Mute the <video> element (may not affect audio sink)';
-        muteStreamBtn.onclick = (e) => {
-          e.stopPropagation();
-          el.muted = !el.muted;
-          muteStreamBtn.textContent = el.muted ? 'Unmute Stream' : 'Mute Stream';
-        };
-        controls.appendChild(muteStreamBtn);
-
-        // Deafen disables per-user controls
-        if (audioPrefs.deafened) {
-          muteUserBtn.disabled = true;
-          muteStreamBtn.disabled = true;
-        }
+      if (stageState.theatre) {
+        stageState.hiddenScreens.add(username);
+        relayoutTheatre();
+      } else {
+        removeScreenTile(username);
       }
-
-    }
-
-
-    controls.appendChild(hideBtn);
+    };
+    controlsTop.appendChild(hideBtn);
 
     box.appendChild(el);
     box.appendChild(overlay);
-    box.appendChild(controls);
+    box.appendChild(controlsTop);
 
     const label = document.createElement('div');
-    label.textContent = `${username} (Screen)`;
+    label.textContent = `${displayNameForUser(username)} (Screen)`;
     label.style.color = 'var(--muted)';
     label.style.fontSize = '12px';
-    label.style.marginTop = '6px';
 
     wrap.appendChild(box);
     wrap.appendChild(label);
+
+    // Remote audio controls (mute/volume) for screen tiles too
+    if (!isLocal) appendRemoteAudioControls(username, wrap);
 
     screenShare.tiles.set(username, el);
     screenShare.overlays.set(username, overlay);
@@ -3195,13 +3750,20 @@
 
     overlay.style.display = 'flex';
 
-    // Ensure stage visible and laid out
-    setScreenStageVisible(true);
-    relayoutScreenStage();
+    const host = currentTrayHost();
+    if (!stageState.theatre) {
+      setStageVisible(true);
+      host.appendChild(wrap);
+    } else {
+      host.appendChild(wrap);
+      rememberTrayNode(wrap);
+      // if nothing is primary yet, make this one primary
+      if (!stageState.primaryNode) stageState.primaryNode = wrap;
+      relayoutTheatre();
+    }
 
     return el;
   }
-
 
   function showScreenOverlay(username, show){
     const ov = screenShare.overlays.get(username);
@@ -3211,7 +3773,11 @@
 
   function removeScreenTile(username){
     const wrap = screenShare.wraps?.get(username);
-    if (wrap) { try { wrap.remove(); } catch(e){} }
+    if (wrap) {
+      try { wrap.remove(); } catch(e){}
+      stageState.savedTrayOrder = (stageState.savedTrayOrder || []).filter(n => n !== wrap);
+      if (stageState.primaryNode === wrap) stageState.primaryNode = null;
+    }
 
     screenShare.wraps?.delete(username);
 
@@ -3220,9 +3786,9 @@
     screenShare.overlays.delete(username);
 
     stageState.hiddenScreens.delete(username);
-    if (stageState.primaryScreenUser === username) stageState.primaryScreenUser = null;
 
-    relayoutScreenStage();
+    if (stageState.theatre) relayoutTheatre();
+    else refreshTrayVisibility();
   }
 
   const onlineUsers = new Set();
@@ -3246,20 +3812,19 @@
     if (!el) return;
 
     const arr = Array.from(typingUsers).sort();
-    if (!arr.length) {
-      el.textContent = "";
-      syncTypingHeightVar();
-      return;
-    }
+    el.textContent = "";
+    if (!arr.length) { syncTypingHeightVar(); return; }
 
-    el.innerHTML = arr.map(u => {
-      const profile = userDirectory[u] || {};
-      const name = profile.display_name || u;
-      return `<div>${name} is typing...</div>`;
-    }).join('');
+    for (const u of arr) {
+      const name = displayNameForUser(u) || u;
+      const row = document.createElement("div");
+      row.textContent = `${name} is typing...`;
+      el.appendChild(row);
+    }
 
     syncTypingHeightVar();
   }
+
 
   function syncTypingHeightVar() {
     const el = document.getElementById("typingLine");
@@ -3341,13 +3906,48 @@
     loadAudioPrefs();
     setupVoiceUI();
 
+    portalToBody('settingsModal');
+    portalToBody('audioModal');
+    portalToBody('roomsModal');
+
     const token = getToken();
     const user = localStorage.getItem('username');
 
+    document.getElementById('audioBtn').onclick = openAudioModal;
+    document.getElementById('closeAudio').onclick = () => { stopMicTest(); document.getElementById('audioModal').style.display = 'none'; };
+    document.getElementById('applyAudio').onclick = applyAudioSettings;
+
+    document.getElementById('micGain').oninput = (e) => setText('micGainVal', `${parseFloat(e.target.value).toFixed(2)}x`);
+    document.getElementById('speakThresh').oninput = (e) => setText('speakThreshVal', `${parseFloat(e.target.value).toFixed(3)}`);
+    document.getElementById('gateThresh').oninput = (e) => setText('gateThreshVal', `${parseFloat(e.target.value).toFixed(3)}`);
+
+    document.getElementById('masterVol').oninput = (e) => {
+      const v = clamp(parseFloat(e.target.value || '1'), 0, 1);
+      setText('masterVolVal', `${Math.round(v * 100)}%`);
+    };
+
+    document.getElementById('testMicBtn').onclick = async () => {
+      const btn = document.getElementById('testMicBtn');
+      const running = !!micTestRAF;
+      if (running) { stopMicTest(); btn.textContent = 'Mic Test'; return; }
+      await startMicTest();
+      btn.textContent = 'Stop Test';
+    };
+
+    document.getElementById('testSpkBtn').onclick = async () => {
+      const a = document.getElementById('ringTone');
+      if (!a) return;
+      const spkId = localStorage.getItem('spk_device_id') || '';
+      if (spkId && supportsSetSinkId(a)) await a.setSinkId(spkId).catch(()=>{});
+      a.currentTime = 0;
+      a.volume = 0.7;
+      a.play().then(() => setTimeout(() => { try { a.pause(); a.currentTime = 0; } catch(e){} }, 900)).catch(()=>{});
+    };
+
     if (token && user) {
-      myId = user;            // <- ensure myId is set for connectSocket
+      myId = user;
       showAppUI();
-      connectSocket();        // will show chatUI on successful WS open
+      connectSocket();
     } else {
       showAuthUI();
     }
@@ -3391,6 +3991,71 @@
     });
   })();
 
+  function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  async function applySpeakerSelectionToAllSinks() {
+    const spkId = localStorage.getItem('spk_device_id') || '';
+    if (!spkId) return;
+
+    for (const [, el] of voice.sinks.entries()) {
+      if (supportsSetSinkId(el)) el.setSinkId(spkId).catch(()=>{});
+    }
+  }
+
+  // Builds the centralized remote mixer UI inside the modal
+  function renderAudioMixer() {
+    const host = document.getElementById('remoteMixer');
+    if (!host) return;
+
+    host.innerHTML = '';
+
+    if (!voice.enabled) {
+      host.innerHTML = `<div style="color:var(--muted); font-size:12px;">Join Voice to adjust other users.</div>`;
+      return;
+    }
+
+    const users = Array.from(voice.users).filter(u => u && u !== myId).sort();
+    if (!users.length) {
+      host.innerHTML = `<div style="color:var(--muted); font-size:12px;">No one else is in voice.</div>`;
+      return;
+    }
+
+    users.forEach(u => {
+      const row = document.createElement('div');
+      row.style.display = 'grid';
+      row.style.gridTemplateColumns = '1fr auto 140px';
+      row.style.gap = '8px';
+      row.style.alignItems = 'center';
+
+      const name = document.createElement('div');
+      name.style.overflow = 'hidden';
+      name.style.textOverflow = 'ellipsis';
+      name.style.whiteSpace = 'nowrap';
+      name.textContent = displayNameForUser(u) || u;
+
+      const muteBtn = document.createElement('button');
+      muteBtn.className = 'btn-small';
+      muteBtn.textContent = audioPrefs.mutedUsers.has(u) ? 'Unmute' : 'Mute';
+      muteBtn.onclick = () => { toggleUserMute(u); renderAudioMixer(); };
+
+      const vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.value = String(audioPrefs.userVolumes.has(u) ? audioPrefs.userVolumes.get(u) : 1);
+      vol.oninput = () => setUserVolume(u, parseFloat(vol.value));
+
+      row.appendChild(name);
+      row.appendChild(muteBtn);
+      row.appendChild(vol);
+
+      host.appendChild(row);
+    });
+  }
 
   // delegated handler for edit buttons (works even if messages are rendered later)
   document.getElementById('container').addEventListener('click', (ev) => {
@@ -3599,9 +4264,6 @@
       gifPicker.style.left = `${left}px`;
       gifPicker.style.top = `${top}px`;
     });
-
-
-
 
     const grid = document.getElementById('gifGrid');
     const searchInp = document.getElementById('gifSearchInput');
@@ -4221,7 +4883,7 @@ async function connectSocket() {
 
       if (!windowFocused) {
         unreadCount++;
-        document.title = `(${unreadCount}) Chat`;
+        document.title = `(${unreadCount}) Chatterbox`;
       }
 
       if (!windowFocused && 'Notification' in window && Notification.permission === 'granted') {
@@ -4446,19 +5108,33 @@ async function connectSocket() {
       setVS(u, patch);
       renderMembersSidebar();
 
-      if (typeof patch.screen === 'boolean') {
       if (patch.screen) {
-        removeVideoTile(u);                 // remove their video placeholder tile
-        ensureScreenTile(u, u === myId);    // show in screenStage
-        setPrimaryScreen(u);                // promote newly-sharing user
-      } else {
-        removeScreenTile(u);                // stop showing screen tile
-        // restore video placeholder tile if user is in voice
-        if (getVS(u).in_voice) {
-          ensureVideoTile(u, u === myId);
-          showVideoOverlay(u, true);
+      removeVideoTile(u);
+      const t = ensureScreenTile(u, u === myId);
+
+      if (stageState.theatre && !stageState.primaryNode) {
+        const w = screenShare.wraps?.get(u);
+        if (w) stageState.primaryNode = w;
+        relayoutTheatre();
+      }
+    } else {
+      removeScreenTile(u);
+
+      if (getVS(u).in_voice) {
+        const t = ensureVideoTile(u, u === myId);
+        showVideoOverlay(u, true);
+
+        if (stageState.theatre && !stageState.primaryNode) {
+          // the newly created tile wrapper is in the DOM; grab it
+          const tray = document.getElementById('videoStage');
+          const w = document.querySelector(`.video-tile[data-user="${u}"]`);
+          if (w) stageState.primaryNode = w;
+          relayoutTheatre();
         }
       }
+
+      // if theatre and nothing left, relayoutTheatre() will auto-exit
+      if (stageState.theatre) relayoutTheatre();
     }
 
     // Optional: auto-expire speaking
@@ -4539,6 +5215,7 @@ async function connectSocket() {
     const sb = document.getElementById('membersSidebar');
     const list = document.getElementById('membersList');
     if (!sb || !list) return;
+    if (document.getElementById('audioModal')?.style.display === 'block') renderAudioMixer();
 
     sb.style.display = 'block';
     list.innerHTML = '';
@@ -4630,7 +5307,6 @@ async function connectSocket() {
 
         if (audioPrefs.deafened) {
           mu.disabled = true;
-          vol.disabled = true;
         }
 
         row.appendChild(controls);
