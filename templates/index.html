@@ -2110,7 +2110,8 @@
     const ice = await getIceConfig();
     const pc = new RTCPeerConnection({
       ...ice,
-      iceCandidatePoolSize: 4,     // helps ICE start faster in many cases
+      iceCandidatePoolSize: 4,
+      iceTransportPolicy: "relay",
     });
 
     // Add our mic tracks
@@ -2128,6 +2129,10 @@
       if (ev.candidate) {
         sendVoiceSignal(peerUsername, { kind: "ice", candidate: ev.candidate });
       }
+    };
+
+    pc.onicecandidateerror = (e) => {
+      console.warn("[webrtc] ICE candidate error", peerUsername, e);
     };
 
     pc.ontrack = (ev) => {
@@ -2185,12 +2190,11 @@
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === "failed" || st === "closed" || st === "disconnected") {
-        // do not aggressively tear down on transient "disconnected" if you want resilience;
-        // for MVP, tear down on failed/closed:
         if (st === "failed" || st === "closed") {
           closePeer(peerUsername);
         }
       }
+      console.log("[webrtc]", peerUsername, "connectionState:", pc.connectionState);
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -2198,6 +2202,7 @@
       if (st === 'failed') {
         iceRestart(peerUsername);
       }
+      console.log("[webrtc]", peerUsername, "iceConnectionState:", pc.iceConnectionState);
     };
 
     pc.onnegotiationneeded = async () => {
@@ -2515,6 +2520,7 @@
 
     const attempts = [
       { audio: { ...base, channelCount: 1, sampleRate: { ideal: 48000 }, sampleSize: 16 } },
+      { audio: { ...base, channelCount: { ideal: 1 } } },
       { audio: { ...base } },
       { audio: true }
     ];
@@ -2581,11 +2587,27 @@
     const gainNode = ctx.createGain();
     gainNode.gain.value = (typeof gain === 'number' ? gain : 1);
 
-    const dest = ctx.createMediaStreamDestination();
-    node.connect(gainNode);
-    gainNode.connect(dest);
+    gainNode.channelCount = 1;
+    gainNode.channelCountMode = 'explicit';
+    gainNode.channelInterpretation = 'speakers';
 
-    audioGraph = { ctx, src, gainNode, dest, rawStream: raw, outStream: dest.stream, hpfNode, gateNode, compNode };
+    node.connect(gainNode);
+
+    // Duplicate mono → stereo (L and R identical)
+    const merger = ctx.createChannelMerger(2);
+    gainNode.connect(merger, 0, 0); // to Left
+    gainNode.connect(merger, 0, 1); // to Right
+
+    const dest = ctx.createMediaStreamDestination();
+    merger.connect(dest);
+
+    audioGraph = {
+      ctx, src, gainNode, merger, dest,
+      rawStream: raw,
+      outStream: dest.stream,
+      hpfNode, gateNode, compNode
+    };
+
     return dest.stream;
   }
 

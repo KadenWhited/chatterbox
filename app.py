@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 import aiofiles
 import os
 from cachetools import TTLCache
+import time, hmac, hashlib, base64
 
 #Authentication/Database
 from database import SessionLocal
@@ -91,22 +92,30 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 
 ICE_CACHE = TTLCache(maxsize=4, ttl=300)  # 5 min cache
 
+def _turn_rest_creds(secret: str, ttl_seconds: int = 3600):
+    # coturn REST: username = <expiry_timestamp>
+    expiry = int(time.time()) + ttl_seconds
+    username = str(expiry)
+    digest = hmac.new(secret.encode("utf-8"), username.encode("utf-8"), hashlib.sha1).digest()
+    credential = base64.b64encode(digest).decode("utf-8")
+    return username, credential
+
 def _build_ice_servers():
-    # Always include a public STUN
     servers = [{"urls": ["stun:stun.l.google.com:19302"]}]
 
-    # Optional TURN (recommended)
     turn_urls = os.getenv("TURN_URLS", "").strip()
     turn_user = os.getenv("TURN_USERNAME", "").strip()
     turn_cred = os.getenv("TURN_CREDENTIAL", "").strip()
+    turn_secret = os.getenv("TURN_SECRET", "").strip()
 
-    if turn_urls and turn_user and turn_cred:
+    if turn_urls:
         urls = [u.strip() for u in turn_urls.split(",") if u.strip()]
-        servers.append({
-            "urls": urls,
-            "username": turn_user,
-            "credential": turn_cred
-        })
+
+        if turn_secret:
+            u, c = _turn_rest_creds(turn_secret, ttl_seconds=3600)
+            servers.append({"urls": urls, "username": u, "credential": c})
+        elif turn_user and turn_cred:
+            servers.append({"urls": urls, "username": turn_user, "credential": turn_cred})
 
     return servers
 
@@ -1665,8 +1674,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 if speaking is not None:
                     speaking = bool(speaking)
 
-                st = connectionmanager.voice_states_in_room(room_id).get(username, {})
                 connectionmanager.set_voice_state(room_id, username, muted=muted, speaking=speaking, video=video, screen=screen)
+                st = connectionmanager.voice_states_in_room(room_id).get(username, {})
                 await connectionmanager.broadcast_room(room_id, {
                     "type": "voice_state",
                     "user": username,
