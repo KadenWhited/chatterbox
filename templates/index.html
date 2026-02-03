@@ -2104,14 +2104,24 @@
     }
   }
 
+  function hasTurnServers(ice) {
+    const servers = (ice && ice.iceServers) || [];
+    return servers.some(s => {
+      const urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+      return urls.some(u => /^turns?:/i.test(String(u || "")));
+    });
+  }
+
   async function ensurePeerConnection(peerUsername) {
     if (voice.pcs.has(peerUsername)) return voice.pcs.get(peerUsername);
 
     const ice = await getIceConfig();
+    const turnOk = hasTurnServers(ice);
+
     const pc = new RTCPeerConnection({
       ...ice,
       iceCandidatePoolSize: 4,
-      iceTransportPolicy: "relay",
+      iceTransportPolicy: turnOk ? "all" : "all",
     });
 
     // Add our mic tracks
@@ -2132,7 +2142,12 @@
     };
 
     pc.onicecandidateerror = (e) => {
-      console.warn("[webrtc] ICE candidate error", peerUsername, e);
+      console.warn("[webrtc] ICE candidate error", peerUsername, {
+        url: e.url,
+        errorCode: e.errorCode,
+        errorText: e.errorText,
+        hostCandidate: e.hostCandidate,
+      });
     };
 
     pc.ontrack = (ev) => {
